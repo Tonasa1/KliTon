@@ -26,6 +26,7 @@ import {
   ClipboardList,
   FlaskConical
 } from 'lucide-react';
+import html2canvas from 'html2canvas';
 import { db } from './utils/db';
 
 // Helper function to convert canvas to grayscale and high-contrast for better OCR
@@ -128,6 +129,10 @@ export default function App() {
   const [selectedReport, setSelectedReport] = useState(null);
   const [selectedAttendance, setSelectedAttendance] = useState(null);
   const [showLocationInput, setShowLocationInput] = useState(false);
+
+  // History Date Range Filter
+  const [historyStartDate, setHistoryStartDate] = useState('');
+  const [historyEndDate, setHistoryEndDate] = useState('');
   const [newLocationName, setNewLocationName] = useState('');
   const [showOfficerInput, setShowOfficerInput] = useState(false);
   const [newOfficerName, setNewOfficerName] = useState('');
@@ -155,6 +160,23 @@ export default function App() {
   const [filterActLocation, setFilterActLocation] = useState('Semua');
   const [settingManageJobdesk, setSettingManageJobdesk] = useState('suhu');
   const [settingLocations, setSettingLocations] = useState([]);
+
+  // Users management states
+  const [users, setUsers] = useState([]);
+  const [newOfficerJobdesk, setNewOfficerJobdesk] = useState('suhu');
+  const [newOfficerRole, setNewOfficerRole] = useState('Operator');
+  const [newOfficerPassword, setNewOfficerPassword] = useState('operator123');
+  
+  // Password profile modal states
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [profileOldPassword, setProfileOldPassword] = useState('');
+  const [profileNewPassword, setProfileNewPassword] = useState('');
+  const [profileConfirmPassword, setProfileConfirmPassword] = useState('');
+
+  // Password reset admin modal states
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [resetUsername, setResetUsername] = useState('');
+  const [resetNewPassword, setResetNewPassword] = useState('');
 
   // Refs
   const videoRef = useRef(null);
@@ -186,6 +208,9 @@ export default function App() {
     
     const dbOfficers = db.getOfficers();
     setOfficers(dbOfficers);
+    
+    const dbUsers = db.getUsers();
+    setUsers(dbUsers);
     
     const savedSettings = db.getSettings();
     setSettings(savedSettings);
@@ -222,20 +247,28 @@ export default function App() {
     }
   }, []);
 
-  // Update default login usernames based on role
+  // Update default login usernames based on role and jobdesk
   useEffect(() => {
     if (loginRole === 'Administrator') {
       setLoginUsername('admin');
+    } else if (loginRole === 'Manager') {
+      setLoginUsername('manager1');
     } else if (loginRole === 'Supervisor') {
-      setLoginUsername('supervisor');
+      if (selectedJobdesk === 'analis') {
+        setLoginUsername('supervisor1');
+      } else {
+        setLoginUsername('supervisor');
+      }
     } else if (loginRole === 'Operator') {
-      const dbOfficers = db.getOfficers();
-      if (dbOfficers.length > 0) {
-        setLoginUsername(dbOfficers[0]);
+      const allowedUsers = users.filter(u => u.role === 'Operator' && u.jobdesk === selectedJobdesk);
+      if (allowedUsers.length > 0) {
+        setLoginUsername(allowedUsers[0].username);
+      } else {
+        setLoginUsername('');
       }
     }
     setLoginPassword('');
-  }, [loginRole, officers]);
+  }, [loginRole, selectedJobdesk, users]);
 
   // Sync form officers with logged-in user if they are Operator
   useEffect(() => {
@@ -838,15 +871,27 @@ export default function App() {
       return;
     }
 
+    let attJobdesk = currentUser.jobdesk || 'suhu';
+    if (currentUser.role !== 'Operator') {
+      const u = users.find(user => user.username === attOfficer);
+      if (u && u.jobdesk) attJobdesk = u.jobdesk;
+    }
+
+    const isApprovalRequired = ['Sakit', 'Izin', 'Cuti'].includes(attType);
+
     const newAttendance = {
       officer: currentUser.role === 'Operator' ? currentUser.name : attOfficer,
+      jobdesk: attJobdesk,
       type: attType,
       image: attImage,
       latitude: attGpsData ? attGpsData.latitude : null,
       longitude: attGpsData ? attGpsData.longitude : null,
       gpsAccuracy: attGpsData ? attGpsData.accuracy : null,
       isFakeGps: attGpsData ? attGpsData.isFakeGps : false,
-      notes: ['Check In', 'Check Out'].includes(attType) ? '' : attNotes
+      notes: isApprovalRequired ? attNotes : '',
+      status: isApprovalRequired ? 'Pending SPV' : 'Disetujui',
+      spvApproval: null,
+      managerApproval: null
     };
 
     const saved = db.saveAttendance(newAttendance);
@@ -1033,38 +1078,84 @@ export default function App() {
     showToast("Lokasi berhasil dihapus.", "success");
   };
 
-  const handleAddOfficer = (e) => {
+  const handleAddUser = (e) => {
     e.preventDefault();
     if (newOfficerName.trim()) {
-      const success = db.saveOfficer(newOfficerName);
+      const userObj = {
+        username: newOfficerName.trim(),
+        role: newOfficerRole,
+        password: newOfficerPassword,
+        jobdesk: (newOfficerRole === 'Operator' || newOfficerRole === 'Supervisor') ? newOfficerJobdesk : 'suhu'
+      };
+      
+      const success = db.saveUser(userObj);
       if (success) {
-        const updated = db.getOfficers();
-        setOfficers(updated);
+        const updatedUsers = db.getUsers();
+        setUsers(updatedUsers);
+        setOfficers(db.getOfficers());
         setNewOfficerName('');
+        setNewOfficerPassword('operator123');
         setShowOfficerInput(false);
-        showToast("Petugas baru ditambahkan!", "success");
-        if (updated.length === 1) {
-          setFormOfficer(updated[0]);
-          setAttOfficer(updated[0]);
-        }
+        showToast("Pengguna baru berhasil ditambahkan!", "success");
       } else {
-        showToast("Petugas sudah terdaftar.", "error");
+        showToast("Username sudah terdaftar.", "error");
       }
     }
   };
 
-  const handleDeleteOfficer = (name) => {
-    if (officers.length <= 1) {
-      showToast("Minimal harus menyisakan 1 petugas.", "error");
+  const handleDeleteUser = (username) => {
+    if (username.toLowerCase() === 'admin') {
+      showToast("Tidak dapat menghapus akun Administrator utama.", "error");
       return;
     }
-    db.deleteOfficer(name);
-    const updated = db.getOfficers();
-    setOfficers(updated);
-    showToast("Petugas berhasil dihapus.", "success");
-    if (!updated.includes(formOfficer)) {
-      setFormOfficer(updated[0]);
-      setAttOfficer(updated[0]);
+    db.deleteUser(username);
+    const updatedUsers = db.getUsers();
+    setUsers(updatedUsers);
+    setOfficers(db.getOfficers());
+    showToast("Pengguna berhasil dihapus.", "success");
+  };
+
+  const handleChangePassword = (e) => {
+    e.preventDefault();
+    if (profileNewPassword !== profileConfirmPassword) {
+      showToast("Sandi baru dan konfirmasi tidak cocok.", "error");
+      return;
+    }
+    const success = db.changePassword(currentUser.name, profileOldPassword, profileNewPassword);
+    if (success) {
+      showToast("Kata sandi berhasil diubah!", "success");
+      setShowProfileModal(false);
+      setProfileOldPassword('');
+      setProfileNewPassword('');
+      setProfileConfirmPassword('');
+    } else {
+      showToast("Sandi lama salah atau akun tidak ditemukan.", "error");
+    }
+  };
+
+  const handleResetPasswordAdmin = (e) => {
+    e.preventDefault();
+    const success = db.resetPassword(resetUsername, resetNewPassword);
+    if (success) {
+      showToast(`Sandi untuk ${resetUsername} berhasil direset!`, "success");
+      setShowResetModal(false);
+      setResetUsername('');
+      setResetNewPassword('');
+      setUsers(db.getUsers());
+    } else {
+      showToast("Gagal mereset sandi.", "error");
+    }
+  };
+
+  const handleApproveAttendance = (id, status) => {
+    const approverName = currentUser.name;
+    const role = currentUser.role;
+    const res = db.updateAttendanceStatus(id, status, approverName, role);
+    if (res) {
+      setAttendance(db.getAttendance());
+      showToast(`Absensi berhasil ${status.includes('Ditolak') ? 'ditolak' : 'disetujui'}!`, "success");
+    } else {
+      showToast("Gagal memproses persetujuan.", "error");
     }
   };
 
@@ -1102,13 +1193,23 @@ export default function App() {
       r.temperature.toString().includes(term) ||
       (r.notes && r.notes.toLowerCase().includes(term));
       
-    return matchLocation && matchStatus && matchSearch;
+    // Date filter
+    const itemDate = new Date(r.timestamp);
+    const afterStart = historyStartDate ? itemDate >= new Date(historyStartDate) : true;
+    const beforeEnd = historyEndDate ? itemDate <= new Date(historyEndDate + 'T23:59:59') : true;
+
+    return matchLocation && matchStatus && matchSearch && afterStart && beforeEnd;
   });
 
   const filteredAttendance = attendance.filter(a => {
-    // Role-based filter: Operator only sees their own attendance logs
-    if (currentUser && currentUser.role === 'Operator') {
-      if (a.officer !== currentUser.name) return false;
+    // Role-based filter
+    if (currentUser) {
+      if (currentUser.role === 'Operator') {
+        if (a.officer !== currentUser.name) return false;
+      } else if (currentUser.role === 'Supervisor' && currentUser.name !== 'supervisor') {
+        // SPV specific jobdesk
+        if (a.jobdesk !== currentUser.jobdesk) return false;
+      }
     }
     
     const matchOfficer = filterAttOfficer === 'Semua' || a.officer === filterAttOfficer;
@@ -1120,7 +1221,12 @@ export default function App() {
       a.type.toLowerCase().includes(term) ||
       (a.isFakeGps ? 'fake' : '').includes(term);
 
-    return matchOfficer && matchType && matchSearch;
+    // Date filter
+    const itemDate = new Date(a.timestamp);
+    const afterStart = historyStartDate ? itemDate >= new Date(historyStartDate) : true;
+    const beforeEnd = historyEndDate ? itemDate <= new Date(historyEndDate + 'T23:59:59') : true;
+
+    return matchOfficer && matchType && matchSearch && afterStart && beforeEnd;
   });
 
   const filteredActivities = activities.filter(a => {
@@ -1139,7 +1245,13 @@ export default function App() {
       (a.location && a.location.toLowerCase().includes(term)) ||
       (a.description && a.description.toLowerCase().includes(term)) ||
       (a.notes && a.notes.toLowerCase().includes(term));
-    return matchLocation && matchSearch;
+      
+    // Date filter
+    const itemDate = new Date(a.timestamp);
+    const afterStart = historyStartDate ? itemDate >= new Date(historyStartDate) : true;
+    const beforeEnd = historyEndDate ? itemDate <= new Date(historyEndDate + 'T23:59:59') : true;
+      
+    return matchLocation && matchSearch && afterStart && beforeEnd;
   });
 
   const getStats = () => {
@@ -1177,6 +1289,21 @@ export default function App() {
 
   const stats = getStats();
 
+  const handleDownloadChart = async () => {
+    const chartElem = document.getElementById('dashboard-chart');
+    if (!chartElem) return;
+    try {
+      const canvas = await html2canvas(chartElem, { backgroundColor: '#ffffff', scale: 2 });
+      const imgData = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = imgData;
+      link.download = `Grafik_Suhu_${new Date().toISOString().split('T')[0]}.png`;
+      link.click();
+    } catch (e) {
+      console.error('Failed to download chart:', e);
+    }
+  };
+
   const renderDashboardChart = () => {
     // Filter reports based on Operator name first
     const visibleReports = reports.filter(r => {
@@ -1208,7 +1335,7 @@ export default function App() {
     
     const temps = chartData.map(r => r.temperature);
     const minTemp = Math.floor(Math.min(...temps)) - 5;
-    const maxTemp = Math.ceil(Math.max(...temps)) + 5;
+    const maxTemp = Math.ceil(Math.max(...temps, settings.highTempAlert)) + 5;
     const tempRange = maxTemp - minTemp;
 
     const points = chartData.map((d, index) => {
@@ -1220,39 +1347,59 @@ export default function App() {
     const pathData = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
     const areaData = `${pathData} L ${points[points.length - 1].x} ${height - paddingY} L ${points[0].x} ${height - paddingY} Z`;
 
+    const warningY = height - paddingY - ((settings.highTempAlert - minTemp) * (height - paddingY * 2) / tempRange);
+
     return (
-      <div className="chart-container">
-        <svg className="chart-svg" viewBox={`0 0 ${width} ${height}`}>
-          <defs>
-            <linearGradient id="chart-gradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.4" />
-              <stop offset="100%" stopColor="var(--primary)" stopOpacity="0.0" />
-            </linearGradient>
-          </defs>
-          
-          <line x1={paddingX} y1={paddingY} x2={width - paddingX} y2={paddingY} className="chart-grid-line" />
-          <line x1={paddingX} y1={height - paddingY} x2={width - paddingX} y2={height - paddingY} className="chart-grid-line" />
-          <line x1={paddingX} y1={(height - paddingY + paddingY)/2} x2={width - paddingX} y2={(height - paddingY + paddingY)/2} className="chart-grid-line" />
-          
-          <path d={areaData} className="chart-area" />
-          <path d={pathData} className="chart-line" />
-          
-          {points.map((p, i) => (
-            <g key={i}>
-              <circle cx={p.x} cy={p.y} r="5" className="chart-dot" />
-              <text x={p.x} y={p.y - 10} textAnchor="middle" fill="var(--text-primary)" fontSize="9" fontWeight="bold" fontFamily="var(--font-heading)">
-                {p.temp.toFixed(1)}°
-              </text>
-              <text x={p.x} y={height - 8} textAnchor="middle" className="chart-axis-text">
-                {p.time}
-              </text>
-            </g>
-          ))}
-          
-          <text x={paddingX - 10} y={paddingY + 3} textAnchor="end" className="chart-axis-text">{maxTemp}°</text>
-          <text x={paddingX - 10} y={(height - paddingY + paddingY)/2 + 3} textAnchor="end" className="chart-axis-text">{((maxTemp+minTemp)/2).toFixed(0)}°</text>
-          <text x={paddingX - 10} y={height - paddingY + 3} textAnchor="end" className="chart-axis-text">{minTemp}°</text>
-        </svg>
+      <div style={{ position: 'relative' }}>
+        <button 
+          onClick={handleDownloadChart}
+          className="btn btn-secondary" 
+          style={{ position: 'absolute', top: '-30px', right: '0', padding: '4px 8px', fontSize: '0.65rem' }}
+          title="Unduh Grafik"
+        >
+          <Download size={14} style={{ marginRight: '4px' }} /> Unduh (.png)
+        </button>
+        <div className="chart-container" id="dashboard-chart" style={{ padding: '8px', background: 'var(--bg-secondary)', borderRadius: '14px' }}>
+          <svg className="chart-svg" viewBox={`0 0 ${width} ${height}`}>
+            <defs>
+              <linearGradient id="chart-gradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.4" />
+                <stop offset="100%" stopColor="var(--primary)" stopOpacity="0.0" />
+              </linearGradient>
+            </defs>
+            
+            <line x1={paddingX} y1={paddingY} x2={width - paddingX} y2={paddingY} className="chart-grid-line" />
+            <line x1={paddingX} y1={height - paddingY} x2={width - paddingX} y2={height - paddingY} className="chart-grid-line" />
+            <line x1={paddingX} y1={(height - paddingY + paddingY)/2} x2={width - paddingX} y2={(height - paddingY + paddingY)/2} className="chart-grid-line" />
+            
+            {/* Standard Warning Line */}
+            {warningY >= paddingY && warningY <= height - paddingY && (
+              <g>
+                <line x1={paddingX} y1={warningY} x2={width - paddingX} y2={warningY} stroke="#f59e0b" strokeWidth="1" strokeDasharray="4,4" />
+                <text x={paddingX - 5} y={warningY + 3} textAnchor="end" fill="#f59e0b" fontSize="8" fontWeight="bold">Batas</text>
+              </g>
+            )}
+
+            <path d={areaData} className="chart-area" />
+            <path d={pathData} className="chart-line" />
+            
+            {points.map((p, i) => (
+              <g key={i}>
+                <circle cx={p.x} cy={p.y} r="5" className="chart-dot" />
+                <text x={p.x} y={p.y - 10} textAnchor="middle" fill="var(--text-primary)" fontSize="9" fontWeight="bold" fontFamily="var(--font-heading)">
+                  {p.temp.toFixed(1)}°
+                </text>
+                <text x={p.x} y={height - 8} textAnchor="middle" className="chart-axis-text">
+                  {p.time}
+                </text>
+              </g>
+            ))}
+            
+            <text x={paddingX - 10} y={paddingY + 3} textAnchor="end" className="chart-axis-text">{maxTemp}°</text>
+            <text x={paddingX - 10} y={(height - paddingY + paddingY)/2 + 3} textAnchor="end" className="chart-axis-text">{((maxTemp+minTemp)/2).toFixed(0)}°</text>
+            <text x={paddingX - 10} y={height - paddingY + 3} textAnchor="end" className="chart-axis-text">{minTemp}°</text>
+          </svg>
+        </div>
       </div>
     );
   };
@@ -1264,8 +1411,8 @@ export default function App() {
     const jobdesk = currentUser.jobdesk || 'suhu';
     
     if (tabName === 'dashboard' || tabName === 'history') return true;
-    if (tabName === 'scan') return jobdesk === 'suhu';
-    if (tabName === 'activity') return jobdesk === 'inspeksi' || jobdesk === 'analis';
+    if (tabName === 'scan') return jobdesk === 'suhu' && (role === 'Operator' || role === 'Supervisor' || role === 'Administrator');
+    if (tabName === 'activity') return (jobdesk === 'inspeksi' || jobdesk === 'analis') && (role === 'Operator' || role === 'Supervisor' || role === 'Administrator');
     if (tabName === 'attendance') return role === 'Operator';
     if (tabName === 'settings') return role === 'Administrator';
     return false;
@@ -1304,6 +1451,7 @@ export default function App() {
               >
                 <option value="Operator">Operator (Staff Lapangan)</option>
                 <option value="Supervisor">Supervisor</option>
+                <option value="Manager">Manager</option>
                 <option value="Administrator">Administrator</option>
               </select>
             </div>
@@ -1349,8 +1497,21 @@ export default function App() {
                   onChange={(e) => setLoginUsername(e.target.value)}
                   required
                 >
-                  {officers.map((name, idx) => (
-                    <option key={idx} value={name}>{name}</option>
+                  <option value="" disabled>Pilih Nama Operator</option>
+                  {users.filter(u => u.role === 'Operator' && u.jobdesk === selectedJobdesk).map((u, idx) => (
+                    <option key={idx} value={u.username}>{u.username}</option>
+                  ))}
+                </select>
+              ) : loginRole === 'Supervisor' ? (
+                <select 
+                  className="form-control"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value)}
+                  required
+                >
+                  <option value="" disabled>Pilih Supervisor</option>
+                  {users.filter(u => u.role === 'Supervisor' && (u.jobdesk === selectedJobdesk || u.username === 'supervisor')).map((u, idx) => (
+                    <option key={idx} value={u.username}>{u.username} {u.username !== 'supervisor' ? `(${u.jobdesk})` : '(General)'}</option>
                   ))}
                 </select>
               ) : (
@@ -1421,6 +1582,9 @@ export default function App() {
           <div className="status-badge normal" style={{ fontSize: '0.65rem', padding: '2px 8px', textTransform: 'uppercase' }}>
             {currentUser.role}
           </div>
+          <button className="modal-close" onClick={() => setShowProfileModal(true)} title="Ganti Sandi" style={{ background: 'var(--bg-tertiary)', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+            <User size={14} />
+          </button>
           <button className="modal-close" onClick={handleLogout} title="Log Out" style={{ background: 'var(--bg-tertiary)', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
             <LogOut size={14} />
           </button>
@@ -1498,6 +1662,62 @@ export default function App() {
                   </button>
                 </div>
               )}
+            </div>
+
+            {/* Advanced Dashboard Info */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+              <div className="glass-card" style={{ marginBottom: 0, display: 'flex', flexDirection: 'column' }}>
+                <h3 className="section-title" style={{ fontSize: '0.8rem', marginBottom: '8px' }}>
+                  <TrendingUp size={14} style={{ color: 'var(--primary)' }} />
+                  Top Uploader (7 Hari)
+                </h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {(() => {
+                    const sevenDaysAgo = new Date();
+                    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+                    const countMap = {};
+                    reports.forEach(r => {
+                        if (new Date(r.timestamp) >= sevenDaysAgo && r.officer) countMap[r.officer] = (countMap[r.officer] || 0) + 1;
+                    });
+                    activities.forEach(a => {
+                        if (new Date(a.timestamp) >= sevenDaysAgo && a.officer) countMap[a.officer] = (countMap[a.officer] || 0) + 1;
+                    });
+                    const top = Object.entries(countMap).sort((a,b) => b[1] - a[1]).slice(0, 3);
+                    if (top.length === 0) return <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Belum ada data mingguan.</span>;
+                    return top.map((t, idx) => (
+                      <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', padding: '4px', background: 'rgba(255,255,255,0.03)', borderRadius: '4px' }}>
+                        <span style={{ fontWeight: 'bold' }}>{idx+1}. {t[0]}</span>
+                        <span style={{ color: 'var(--primary)' }}>{t[1]} Laporan</span>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </div>
+
+              <div className="glass-card" style={{ marginBottom: 0, display: 'flex', flexDirection: 'column' }}>
+                <h3 className="section-title" style={{ fontSize: '0.8rem', marginBottom: '8px' }}>
+                  <UserCheck size={14} style={{ color: '#10b981' }} />
+                  Sedang Bertugas (Live)
+                </h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {(() => {
+                    const todayStr = new Date().toDateString();
+                    const todayAtt = attendance.filter(a => new Date(a.timestamp).toDateString() === todayStr);
+                    const latestEvents = {};
+                    todayAtt.sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp)).forEach(a => {
+                        latestEvents[a.officer] = a;
+                    });
+                    const checkedIn = Object.entries(latestEvents).filter(([_, event]) => event.type === 'Check In').map(e => e[0]);
+                    if (checkedIn.length === 0) return <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Tidak ada petugas di lapangan.</span>;
+                    return checkedIn.map((officer, idx) => (
+                      <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', padding: '4px' }}>
+                        <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 5px #10b981' }}></div>
+                        <span>{officer}</span>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </div>
             </div>
 
             {/* Chart Container */}
@@ -2148,6 +2368,24 @@ export default function App() {
               )}
             </div>
 
+            {/* Global Date Filter for History */}
+            <div className="glass-card" style={{ padding: '10px 14px', marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>
+                <Calendar size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'text-bottom' }} />
+                Filter Rentang Waktu
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <div>
+                  <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Dari Tanggal</label>
+                  <input type="date" className="form-control" style={{ padding: '6px 8px', fontSize: '0.75rem' }} value={historyStartDate} onChange={(e) => setHistoryStartDate(e.target.value)} />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Sampai Tanggal</label>
+                  <input type="date" className="form-control" style={{ padding: '6px 8px', fontSize: '0.75rem' }} value={historyEndDate} onChange={(e) => setHistoryEndDate(e.target.value)} />
+                </div>
+              </div>
+            </div>
+
             {/* Sub-Tab 1: Suhu Alat */}
             {(currentUser.jobdesk || 'suhu') === 'suhu' && historySubTab === 'suhu' && (
               <div>
@@ -2198,9 +2436,14 @@ export default function App() {
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 'bold' }}>
                     Ditemukan {filteredReports.length} Laporan Suhu
                   </span>
-                  <button className="btn btn-secondary" onClick={handleExportCSV} style={{ padding: '6px 12px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px' }}>
-                    <Download size={14} /> Ekspor CSV
-                  </button>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button className="btn btn-secondary" onClick={() => db.exportToPDF(filteredReports)} style={{ padding: '6px 12px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px' }}>
+                      <Download size={14} /> PDF
+                    </button>
+                    <button className="btn btn-secondary" onClick={handleExportCSV} style={{ padding: '6px 12px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px' }}>
+                      <Download size={14} /> CSV
+                    </button>
+                  </div>
                 </div>
 
                 {filteredReports.length === 0 ? (
@@ -2285,9 +2528,14 @@ export default function App() {
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 'bold' }}>
                     Ditemukan {filteredActivities.length} Kegiatan
                   </span>
-                  <button className="btn btn-secondary" onClick={() => db.exportActivitiesToCSV(filteredActivities)} style={{ padding: '6px 12px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px' }}>
-                    <Download size={14} /> Ekspor CSV
-                  </button>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button className="btn btn-secondary" onClick={() => db.exportActivitiesToPDF(filteredActivities)} style={{ padding: '6px 12px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px' }}>
+                      <Download size={14} /> PDF
+                    </button>
+                    <button className="btn btn-secondary" onClick={() => db.exportActivitiesToCSV(filteredActivities)} style={{ padding: '6px 12px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px' }}>
+                      <Download size={14} /> CSV
+                    </button>
+                  </div>
                 </div>
 
                 {filteredActivities.length === 0 ? (
@@ -2383,9 +2631,14 @@ export default function App() {
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 'bold' }}>
                     Ditemukan {filteredAttendance.length} Riwayat Absensi
                   </span>
-                  <button className="btn btn-secondary" onClick={handleExportCSV} style={{ padding: '6px 12px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px' }}>
-                    <Download size={14} /> Ekspor CSV
-                  </button>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button className="btn btn-secondary" onClick={() => db.exportAttendanceToPDF(filteredAttendance)} style={{ padding: '6px 12px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px' }}>
+                      <Download size={14} /> PDF
+                    </button>
+                    <button className="btn btn-secondary" onClick={handleExportCSV} style={{ padding: '6px 12px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px' }}>
+                      <Download size={14} /> CSV
+                    </button>
+                  </div>
                 </div>
 
                 {filteredAttendance.length === 0 ? (
@@ -2458,47 +2711,118 @@ export default function App() {
         {activeTab === 'settings' && isTabVisible('settings') && (
           <div className="settings-list">
             
-            {/* Manage Staff (Petugas) */}
+            {/* Manage Staff & Users */}
             <div className="glass-card">
               <div className="flex-row-between" style={{ marginBottom: '10px' }}>
                 <h3 className="section-title" style={{ marginBottom: 0 }}>
                   <User size={16} style={{ color: 'var(--primary)' }} />
-                  Kelola Daftar Petugas
+                  Kelola Pengguna & Peran
                 </h3>
                 {!showOfficerInput && (
                   <button className="btn btn-secondary" onClick={() => setShowOfficerInput(true)} style={{ padding: '4px 10px', height: 'auto', fontSize: '0.7rem', borderRadius: '6px' }}>
-                    <Plus size={12} /> Tambah
+                    <Plus size={12} /> Tambah User
                   </button>
                 )}
               </div>
 
               {showOfficerInput && (
-                <form onSubmit={handleAddOfficer} style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-                  <input 
-                    type="text" 
-                    placeholder="Nama petugas baru..." 
-                    className="form-control"
-                    style={{ flex: 1, padding: '8px 12px', fontSize: '0.8rem' }}
-                    value={newOfficerName}
-                    onChange={(e) => setNewOfficerName(e.target.value)}
-                    required
-                  />
-                  <button type="submit" className="btn btn-primary" style={{ padding: '8px 12px', flex: 'none' }}>
-                    Simpan
-                  </button>
-                  <button type="button" className="btn btn-secondary" onClick={() => setShowOfficerInput(false)} style={{ padding: '8px 12px', flex: 'none' }}>
-                    <X size={14} />
-                  </button>
+                <form onSubmit={handleAddUser} style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px', background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '8px', border: '1px dashed var(--card-border)' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                    <input 
+                      type="text" 
+                      placeholder="Username..." 
+                      className="form-control"
+                      style={{ padding: '8px 12px', fontSize: '0.8rem' }}
+                      value={newOfficerName}
+                      onChange={(e) => setNewOfficerName(e.target.value)}
+                      required
+                    />
+                    <select 
+                      className="form-control"
+                      style={{ padding: '8px 12px', fontSize: '0.8rem' }}
+                      value={newOfficerRole}
+                      onChange={(e) => setNewOfficerRole(e.target.value)}
+                    >
+                      <option value="Operator">Operator</option>
+                      <option value="Supervisor">Supervisor</option>
+                      <option value="Manager">Manager</option>
+                    </select>
+                  </div>
+                  
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                    <input 
+                      type="text" 
+                      placeholder="Password default..." 
+                      className="form-control"
+                      style={{ padding: '8px 12px', fontSize: '0.8rem' }}
+                      value={newOfficerPassword}
+                      onChange={(e) => setNewOfficerPassword(e.target.value)}
+                      required
+                    />
+                    {(newOfficerRole === 'Operator' || newOfficerRole === 'Supervisor') && (
+                      <select 
+                        className="form-control"
+                        style={{ padding: '8px 12px', fontSize: '0.8rem' }}
+                        value={newOfficerJobdesk}
+                        onChange={(e) => setNewOfficerJobdesk(e.target.value)}
+                      >
+                        <option value="suhu">Suhu</option>
+                        <option value="inspeksi">Inspeksi</option>
+                        <option value="analis">Analis</option>
+                      </select>
+                    )}
+                  </div>
+                  
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                    <button type="submit" className="btn btn-primary" style={{ padding: '8px 12px', flex: 1 }}>
+                      Simpan Pengguna
+                    </button>
+                    <button type="button" className="btn btn-secondary" onClick={() => setShowOfficerInput(false)} style={{ padding: '8px 12px', flex: 'none' }}>
+                      Batal
+                    </button>
+                  </div>
                 </form>
               )}
 
-              <div className="tag-list">
-                {officers.map((name, idx) => (
-                  <div key={idx} className="tag-item">
-                    <span>{name}</span>
-                    <button className="tag-remove" onClick={() => handleDeleteOfficer(name)}>×</button>
-                  </div>
-                ))}
+              <div style={{ overflowX: 'auto', marginTop: '12px' }}>
+                <table style={{ width: '100%', fontSize: '0.75rem', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--card-border)', textAlign: 'left', color: 'var(--text-muted)' }}>
+                      <th style={{ padding: '8px' }}>Username</th>
+                      <th style={{ padding: '8px' }}>Peran</th>
+                      <th style={{ padding: '8px' }}>Jobdesk</th>
+                      <th style={{ padding: '8px', textAlign: 'right' }}>Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {users.filter(u => u.username !== 'admin').map((u, idx) => (
+                      <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
+                        <td style={{ padding: '8px', fontWeight: 'bold' }}>{u.username}</td>
+                        <td style={{ padding: '8px' }}>{u.role}</td>
+                        <td style={{ padding: '8px' }}>{u.jobdesk || '-'}</td>
+                        <td style={{ padding: '8px', textAlign: 'right', display: 'flex', justifyContent: 'flex-end', gap: '4px' }}>
+                          <button 
+                            className="btn btn-secondary" 
+                            style={{ padding: '4px 8px', fontSize: '0.65rem' }}
+                            onClick={() => {
+                              setResetUsername(u.username);
+                              setShowResetModal(true);
+                            }}
+                          >
+                            Reset Sandi
+                          </button>
+                          <button 
+                            className="btn btn-secondary" 
+                            style={{ padding: '4px 8px', fontSize: '0.65rem', color: 'var(--danger)', borderColor: 'rgba(239, 68, 68, 0.2)' }}
+                            onClick={() => handleDeleteUser(u.username)}
+                          >
+                            Hapus
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
 
@@ -3041,7 +3365,58 @@ ALTER TABLE activities DISABLE ROW LEVEL SECURITY;`}
                 )}
               </div>
 
-              {currentUser.role !== 'Operator' && (
+              {['Sakit', 'Izin', 'Cuti'].includes(selectedAttendance.type) && (
+                <div className="glass-card" style={{ padding: '16px', marginBottom: 0, marginTop: '12px' }}>
+                  <h4 style={{ fontSize: '0.8rem', marginBottom: '8px', borderBottom: '1px solid var(--card-border)', paddingBottom: '4px' }}>Status Persetujuan</h4>
+                  
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Supervisor:</span>
+                    {selectedAttendance.spvApproval ? (
+                      <span className="status-badge" style={{ background: selectedAttendance.spvApproval.status === 'Disetujui' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: selectedAttendance.spvApproval.status === 'Disetujui' ? '#10b981' : '#ef4444', fontSize: '0.65rem', padding: '2px 6px' }}>
+                        {selectedAttendance.spvApproval.status} ({selectedAttendance.spvApproval.by})
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Pending</span>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Manager:</span>
+                    {selectedAttendance.managerApproval ? (
+                      <span className="status-badge" style={{ background: selectedAttendance.managerApproval.status === 'Disetujui' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: selectedAttendance.managerApproval.status === 'Disetujui' ? '#10b981' : '#ef4444', fontSize: '0.65rem', padding: '2px 6px' }}>
+                        {selectedAttendance.managerApproval.status} ({selectedAttendance.managerApproval.by})
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Pending</span>
+                    )}
+                  </div>
+
+                  {/* Action Buttons for Approvers */}
+                  {currentUser.role === 'Supervisor' && !selectedAttendance.spvApproval && selectedAttendance.status === 'Pending SPV' && (
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                      <button className="btn btn-primary" style={{ flex: 1, padding: '8px', fontSize: '0.75rem' }} onClick={() => handleApproveAttendance(selectedAttendance.id, 'Disetujui SPV')}>
+                        Setujui
+                      </button>
+                      <button className="btn btn-secondary" style={{ flex: 1, padding: '8px', fontSize: '0.75rem', color: 'var(--danger)', borderColor: 'rgba(239, 68, 68, 0.2)' }} onClick={() => handleApproveAttendance(selectedAttendance.id, 'Ditolak SPV')}>
+                        Tolak
+                      </button>
+                    </div>
+                  )}
+
+                  {currentUser.role === 'Manager' && selectedAttendance.spvApproval && selectedAttendance.spvApproval.status === 'Disetujui' && !selectedAttendance.managerApproval && selectedAttendance.status === 'Pending Manager' && (
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                      <button className="btn btn-primary" style={{ flex: 1, padding: '8px', fontSize: '0.75rem' }} onClick={() => handleApproveAttendance(selectedAttendance.id, 'Disetujui Manager')}>
+                        Setujui
+                      </button>
+                      <button className="btn btn-secondary" style={{ flex: 1, padding: '8px', fontSize: '0.75rem', color: 'var(--danger)', borderColor: 'rgba(239, 68, 68, 0.2)' }} onClick={() => handleApproveAttendance(selectedAttendance.id, 'Ditolak Manager')}>
+                        Tolak
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {currentUser.role === 'Administrator' && (
                 <button className="btn btn-secondary" onClick={() => handleDeleteAttendance(selectedAttendance.id)} style={{ color: 'var(--danger)', borderColor: 'rgba(239, 68, 68, 0.2)', background: 'rgba(239, 68, 68, 0.05)', marginTop: '8px' }}>
                   <Trash2 size={16} /> Hapus Absensi
                 </button>
@@ -3181,6 +3556,55 @@ ALTER TABLE activities DISABLE ROW LEVEL SECURITY;`}
                 </button>
               )}
             </div>
+          </div>
+        </div>
+      )}
+      {/* ----------------- PROFILE MODAL (Ganti Sandi) ----------------- */}
+      {showProfileModal && (
+        <div className="modal-overlay" onClick={() => setShowProfileModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 style={{ fontSize: '1.1rem', fontWeight: '700' }}>Ubah Kata Sandi</h3>
+              <button className="modal-close" onClick={() => setShowProfileModal(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <form onSubmit={handleChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px' }}>
+              <div className="form-group">
+                <label>Kata Sandi Lama</label>
+                <input type="password" required className="form-control" value={profileOldPassword} onChange={e => setProfileOldPassword(e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label>Kata Sandi Baru</label>
+                <input type="password" required className="form-control" value={profileNewPassword} onChange={e => setProfileNewPassword(e.target.value)} minLength={6} />
+              </div>
+              <div className="form-group">
+                <label>Konfirmasi Sandi Baru</label>
+                <input type="password" required className="form-control" value={profileConfirmPassword} onChange={e => setProfileConfirmPassword(e.target.value)} minLength={6} />
+              </div>
+              <button type="submit" className="btn btn-primary" style={{ marginTop: '8px' }}>Simpan Perubahan</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- ADMIN RESET MODAL ----------------- */}
+      {showResetModal && (
+        <div className="modal-overlay" onClick={() => setShowResetModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 style={{ fontSize: '1.1rem', fontWeight: '700' }}>Reset Sandi: {resetUsername}</h3>
+              <button className="modal-close" onClick={() => setShowResetModal(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <form onSubmit={handleResetPasswordAdmin} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px' }}>
+              <div className="form-group">
+                <label>Kata Sandi Baru</label>
+                <input type="text" required className="form-control" value={resetNewPassword} onChange={e => setResetNewPassword(e.target.value)} minLength={6} />
+              </div>
+              <button type="submit" className="btn btn-primary" style={{ marginTop: '8px', background: 'var(--danger)' }}>Reset Sandi</button>
+            </form>
           </div>
         </div>
       )}

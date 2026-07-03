@@ -1,5 +1,6 @@
 // Local Database utilities for ThermaScan using localStorage
-
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
 const REPORTS_KEY = 'thermascan_reports';
 const LOCATIONS_KEY = 'thermascan_locations';
 const SETTINGS_KEY = 'thermascan_settings';
@@ -15,6 +16,19 @@ const DEFAULT_OFFICERS = [
   'JUMAHIR',
   'IMAN TAQWA',
   'ANDI MAJJAJARENG'
+];
+
+const USERS_KEY = 'thermascan_users';
+
+const DEFAULT_USERS = [
+  { username: 'admin', role: 'Administrator', password: 'admin123', jobdesk: 'suhu' },
+  { username: 'supervisor', role: 'Supervisor', password: 'spv123', jobdesk: 'suhu' },
+  { username: 'supervisor1', role: 'Supervisor', password: 'spv123', jobdesk: 'analis' },
+  { username: 'manager1', role: 'Manager', password: 'manager123', jobdesk: 'suhu' },
+  { username: 'FAHRIL', role: 'Operator', password: 'operator123', jobdesk: 'suhu' },
+  { username: 'JUMAHIR', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
+  { username: 'IMAN TAQWA', role: 'Operator', password: 'operator123', jobdesk: 'analis' },
+  { username: 'ANDI MAJJAJARENG', role: 'Operator', password: 'operator123', jobdesk: 'suhu' }
 ];
 
 const DEFAULT_LOCATIONS = [
@@ -57,6 +71,9 @@ const DEFAULT_SETTINGS = {
 if (!localStorage.getItem(OFFICERS_KEY)) {
   localStorage.setItem(OFFICERS_KEY, JSON.stringify(DEFAULT_OFFICERS));
 }
+if (!localStorage.getItem(USERS_KEY)) {
+  localStorage.setItem(USERS_KEY, JSON.stringify(DEFAULT_USERS));
+}
 if (!localStorage.getItem(LOCATIONS_KEY)) {
   localStorage.setItem(LOCATIONS_KEY, JSON.stringify(DEFAULT_LOCATIONS));
 }
@@ -82,28 +99,30 @@ if (!localStorage.getItem(ANALIS_LOCATIONS_KEY)) {
 export const db = {
   // --- SESSION LOGIN SYSTEM ---
   login(role, username, password, jobdesk = 'suhu') {
-    // Basic verification logic
-    if (role === 'Administrator') {
-      if (username.toLowerCase() === 'admin' && password === 'admin123') {
-        const session = { role, name: 'Administrator', jobdesk };
-        localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-        return session;
-      }
-    } else if (role === 'Supervisor') {
-      if (username.toLowerCase() === 'supervisor' && password === 'spv123') {
-        const session = { role, name: 'Supervisor', jobdesk };
-        localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-        return session;
+    const users = this.getUsers();
+    const user = users.find(u => u.username.toLowerCase() === username.toLowerCase() && u.role === role);
+    if (!user || user.password !== password) {
+      return null;
+    }
+    
+    // Additional validation
+    if (role === 'Supervisor') {
+      if (username.toLowerCase() === 'supervisor1' && jobdesk !== 'analis') {
+        return null;
       }
     } else if (role === 'Operator') {
-      const officers = this.getOfficers();
-      if (officers.includes(username) && password === 'operator123') {
-        const session = { role, name: username, jobdesk };
-        localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-        return session;
+      if (user.jobdesk !== jobdesk) {
+        return null;
       }
     }
-    return null;
+
+    const session = { 
+      role, 
+      name: user.username, 
+      jobdesk: role === 'Supervisor' && username.toLowerCase() === 'supervisor1' ? 'analis' : jobdesk 
+    };
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    return session;
   },
 
   logout() {
@@ -268,23 +287,55 @@ export const db = {
     }
   },
 
-  // --- OFFICERS (Petugas) ---
-  getOfficers() {
+  // --- OFFICERS (Petugas) & USERS ---
+  getUsers() {
     try {
-      const data = localStorage.getItem(OFFICERS_KEY);
-      return data ? JSON.parse(data) : DEFAULT_OFFICERS;
+      const data = localStorage.getItem(USERS_KEY);
+      return data ? JSON.parse(data) : DEFAULT_USERS;
     } catch (e) {
-      return DEFAULT_OFFICERS;
+      return DEFAULT_USERS;
     }
   },
 
-  saveOfficer(name) {
+  saveUser(user) {
     try {
-      const officers = this.getOfficers();
-      const trimmed = name.trim().toUpperCase();
-      if (trimmed && !officers.includes(trimmed)) {
-        officers.push(trimmed);
-        localStorage.setItem(OFFICERS_KEY, JSON.stringify(officers));
+      const users = this.getUsers();
+      const existingIdx = users.findIndex(u => u.username.toLowerCase() === user.username.toLowerCase());
+      const updatedUser = {
+        password: 'operator123', // default
+        jobdesk: 'suhu',         // default
+        ...user
+      };
+      if (existingIdx >= 0) {
+        users[existingIdx] = { ...users[existingIdx], ...updatedUser };
+      } else {
+        users.push(updatedUser);
+      }
+      localStorage.setItem(USERS_KEY, JSON.stringify(users));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  },
+
+  deleteUser(username) {
+    try {
+      const users = this.getUsers();
+      const filtered = users.filter(u => u.username.toLowerCase() !== username.toLowerCase());
+      localStorage.setItem(USERS_KEY, JSON.stringify(filtered));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  },
+
+  changePassword(username, oldPassword, newPassword) {
+    try {
+      const users = this.getUsers();
+      const user = users.find(u => u.username.toLowerCase() === username.toLowerCase());
+      if (user && user.password === oldPassword) {
+        user.password = newPassword;
+        localStorage.setItem(USERS_KEY, JSON.stringify(users));
         return true;
       }
       return false;
@@ -293,15 +344,32 @@ export const db = {
     }
   },
 
-  deleteOfficer(name) {
+  resetPassword(username, newPassword) {
     try {
-      const officers = this.getOfficers();
-      const filtered = officers.filter(o => o !== name);
-      localStorage.setItem(OFFICERS_KEY, JSON.stringify(filtered));
-      return true;
+      const users = this.getUsers();
+      const user = users.find(u => u.username.toLowerCase() === username.toLowerCase());
+      if (user) {
+        user.password = newPassword;
+        localStorage.setItem(USERS_KEY, JSON.stringify(users));
+        return true;
+      }
+      return false;
     } catch (e) {
       return false;
     }
+  },
+
+  getOfficers() {
+    const users = this.getUsers();
+    return users.filter(u => u.role === 'Operator').map(u => u.username);
+  },
+
+  saveOfficer(name, jobdesk = 'suhu') {
+    return this.saveUser({ username: name, role: 'Operator', password: 'operator123', jobdesk });
+  },
+
+  deleteOfficer(name) {
+    return this.deleteUser(name);
   },
 
   // --- LOCATIONS ---
@@ -523,6 +591,118 @@ export const db = {
     return true;
   },
 
+  exportToPDF(reports) {
+    if (!reports || reports.length === 0) return false;
+    const doc = new jsPDF('landscape');
+    
+    doc.setFontSize(16);
+    doc.text('Laporan Suhu ThermaScan', 14, 15);
+    doc.setFontSize(10);
+    doc.text(`Waktu Cetak: ${new Date().toLocaleString('id-ID')}`, 14, 22);
+
+    const tableData = reports.map(r => {
+      const statusObj = this.getTemperatureStatus(r.temperature);
+      return [
+        new Date(r.timestamp).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }),
+        r.temperature,
+        statusObj.label,
+        r.location,
+        r.officer || '-',
+        r.notes || '-'
+      ];
+    });
+
+    doc.autoTable({
+      startY: 28,
+      head: [['Waktu', 'Suhu (C)', 'Status', 'Lokasi', 'Petugas', 'Catatan']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [59, 130, 246] }
+    });
+
+    doc.save('Laporan_Suhu_ThermaScan.pdf');
+    return true;
+  },
+
+  exportActivitiesToPDF(activities) {
+    if (!activities || activities.length === 0) return false;
+    const doc = new jsPDF('landscape');
+    
+    doc.setFontSize(16);
+    doc.text('Laporan Kegiatan ThermaScan', 14, 15);
+    doc.setFontSize(10);
+    doc.text(`Waktu Cetak: ${new Date().toLocaleString('id-ID')}`, 14, 22);
+
+    const tableData = activities.map(a => [
+      new Date(a.timestamp).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }),
+      a.jobdesk || '-',
+      a.officer || '-',
+      a.location || '-',
+      a.description || '-',
+      a.notes || '-'
+    ]);
+
+    doc.autoTable({
+      startY: 28,
+      head: [['Waktu', 'Jobdesk', 'Petugas', 'Lokasi', 'Kegiatan', 'Catatan']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [59, 130, 246] }
+    });
+
+    doc.save('Laporan_Kegiatan_ThermaScan.pdf');
+    return true;
+  },
+
+  exportAttendanceToPDF(attendanceList) {
+    if (!attendanceList || attendanceList.length === 0) return false;
+    const doc = new jsPDF('landscape');
+    
+    doc.setFontSize(16);
+    doc.text('Laporan Absensi Petugas', 14, 15);
+    doc.setFontSize(10);
+    doc.text(`Waktu Cetak: ${new Date().toLocaleString('id-ID')}`, 14, 22);
+
+    // Hitung ringkasan kesimpulan
+    let hadir = 0, cuti = 0, sakit = 0, izin = 0;
+    attendanceList.forEach(a => {
+      if (a.type === 'Check In' || a.type === 'Check Out') hadir++;
+      else if (a.type === 'Cuti') cuti++;
+      else if (a.type === 'Sakit') sakit++;
+      else if (a.type === 'Izin') izin++;
+    });
+
+    // Tampilkan ringkasan
+    doc.setFontSize(11);
+    doc.text('Ringkasan Kehadiran:', 14, 30);
+    doc.setFontSize(10);
+    doc.text(`Hadir (Check In/Out): ${hadir}`, 14, 36);
+    doc.text(`Sakit: ${sakit}`, 14, 42);
+    doc.text(`Izin: ${izin}`, 14, 48);
+    doc.text(`Cuti: ${cuti}`, 14, 54);
+
+    const tableData = attendanceList.map(a => [
+      new Date(a.timestamp).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }),
+      a.officer,
+      a.type,
+      a.status || '-',
+      (a.latitude && a.longitude) ? 'Ya' : 'Tidak',
+      a.isFakeGps ? 'YA' : 'TIDAK',
+      a.notes || '-'
+    ]);
+
+    doc.autoTable({
+      startY: 60,
+      head: [['Waktu', 'Petugas', 'Tipe', 'Status Approval', 'Ada GPS', 'Fake GPS', 'Catatan']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [59, 130, 246] }
+    });
+
+    doc.save('Laporan_Absensi_ThermaScan.pdf');
+    return true;
+  },
+
   // --- CLOUD SYNC CONFIG (SUPABASE) ---
   getSupabaseConfig() {
     return {
@@ -577,12 +757,17 @@ export const db = {
         id: a.id,
         timestamp: a.timestamp,
         officer: a.officer,
+        jobdesk: a.jobdesk || 'suhu',
         type: a.type,
         image: a.image,
         latitude: a.latitude,
         longitude: a.longitude,
         gpsAccuracy: a.gps_accuracy,
-        isFakeGps: a.is_fake_gps
+        isFakeGps: a.is_fake_gps,
+        notes: a.notes,
+        status: a.status || 'Disetujui',
+        spvApproval: a.spv_approval,
+        managerApproval: a.manager_approval
       }));
 
       // 2. Merge Reports
@@ -632,12 +817,17 @@ export const db = {
           id: a.id,
           timestamp: a.timestamp,
           officer: a.officer,
+          jobdesk: a.jobdesk || 'suhu',
           type: a.type,
           image: a.image,
           latitude: a.latitude,
           longitude: a.longitude,
           gps_accuracy: a.gpsAccuracy,
-          is_fake_gps: a.isFakeGps
+          is_fake_gps: a.isFakeGps,
+          notes: a.notes || null,
+          status: a.status || 'Disetujui',
+          spv_approval: a.spvApproval || null,
+          manager_approval: a.managerApproval || null
         };
         await fetch(`${url}/rest/v1/attendance`, {
           method: 'POST',
@@ -719,12 +909,17 @@ export const db = {
         id: attendance.id,
         timestamp: attendance.timestamp,
         officer: attendance.officer,
+        jobdesk: attendance.jobdesk || 'suhu',
         type: attendance.type,
         image: attendance.image,
         latitude: attendance.latitude,
         longitude: attendance.longitude,
         gps_accuracy: attendance.gpsAccuracy,
-        is_fake_gps: attendance.isFakeGps
+        is_fake_gps: attendance.isFakeGps,
+        notes: attendance.notes || null,
+        status: attendance.status || 'Disetujui',
+        spv_approval: attendance.spvApproval || null,
+        manager_approval: attendance.managerApproval || null
       };
 
       await fetch(`${url}/rest/v1/attendance`, {
@@ -734,6 +929,64 @@ export const db = {
       });
     } catch (e) {
       console.error("Failed to upload attendance to cloud:", e);
+    }
+  },
+
+  updateAttendanceStatus(id, status, approverName, role) {
+    try {
+      const list = this.getAttendance();
+      const entry = list.find(a => a.id === id);
+      if (entry) {
+        entry.status = status;
+        if (role === 'Supervisor') {
+          entry.spvApproval = approverName;
+        } else if (role === 'Manager') {
+          entry.managerApproval = approverName;
+        }
+        localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(list));
+        this.updateAttendanceOnCloud(entry);
+        return entry;
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  },
+
+  async updateAttendanceOnCloud(attendance) {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return;
+    try {
+      const headers = {
+        'apikey': key,
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json'
+      };
+      
+      const mapped = {
+        id: attendance.id,
+        timestamp: attendance.timestamp,
+        officer: attendance.officer,
+        jobdesk: attendance.jobdesk || 'suhu',
+        type: attendance.type,
+        image: attendance.image,
+        latitude: attendance.latitude,
+        longitude: attendance.longitude,
+        gps_accuracy: attendance.gpsAccuracy,
+        is_fake_gps: attendance.isFakeGps,
+        notes: attendance.notes || null,
+        status: attendance.status || 'Disetujui',
+        spv_approval: attendance.spvApproval || null,
+        manager_approval: attendance.managerApproval || null
+      };
+
+      await fetch(`${url}/rest/v1/attendance?id=eq.${attendance.id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify(mapped)
+      });
+    } catch (e) {
+      console.error("Failed to update attendance on cloud:", e);
     }
   },
 
