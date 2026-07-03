@@ -26,6 +26,37 @@ import {
 } from 'lucide-react';
 import { db } from './utils/db';
 
+// Helper function to convert canvas to grayscale and high-contrast for better OCR
+const preprocessImage = (canvas) => {
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imgData.data;
+  
+  // Grayscale + High Contrast filter
+  const contrast = 120; // 0 to 255
+  const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+  
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    
+    // Grayscale conversion
+    const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+    
+    // Apply contrast
+    let val = factor * (gray - 128) + 128;
+    
+    // Clamp to [0, 255]
+    val = Math.max(0, Math.min(255, val));
+    
+    data[i] = val;
+    data[i + 1] = val;
+    data[i + 2] = val;
+  }
+  ctx.putImageData(imgData, 0, 0);
+};
+
 export default function App() {
   // Authentication & Session States
   const [currentUser, setCurrentUser] = useState(null); // { role, name }
@@ -83,6 +114,11 @@ export default function App() {
   const [showOfficerInput, setShowOfficerInput] = useState(false);
   const [newOfficerName, setNewOfficerName] = useState('');
 
+  // Cloud Sync States
+  const [cloudUrl, setCloudUrl] = useState('');
+  const [cloudKey, setCloudKey] = useState('');
+  const [syncLoading, setSyncLoading] = useState(false);
+
   // Refs
   const videoRef = useRef(null);
   const attVideoRef = useRef(null);
@@ -121,6 +157,25 @@ export default function App() {
     const locs = db.getLocations();
     if (locs.length > 0) {
       setFormLocation(locs[0]);
+    }
+
+    // Load and trigger Supabase Sync
+    const config = db.getSupabaseConfig();
+    setCloudUrl(config.url);
+    setCloudKey(config.key);
+    if (config.url && config.key) {
+      setSyncLoading(true);
+      db.syncWithCloud().then(res => {
+        if (res) {
+          setReports(res.reports);
+          setAttendance(res.attendance);
+          showToast("Data tersinkronisasi otomatis dengan Cloud DB.", "success");
+        }
+      }).catch(err => {
+        console.error("Auto sync failed:", err);
+      }).finally(() => {
+        setSyncLoading(false);
+      });
     }
   }, []);
 
@@ -261,11 +316,20 @@ export default function App() {
     cropCanvas.height = cropH;
     const cropCtx = cropCanvas.getContext('2d');
     cropCtx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+    const originalCroppedDataUrl = cropCanvas.toDataURL('image/jpeg', 0.95);
     
-    const croppedDataUrl = cropCanvas.toDataURL('image/jpeg', 0.9);
-    setCapturedImage(croppedDataUrl);
+    // Create OCR preprocessed image
+    const ocrCanvas = document.createElement('canvas');
+    ocrCanvas.width = cropW;
+    ocrCanvas.height = cropH;
+    const ocrCtx = ocrCanvas.getContext('2d');
+    ocrCtx.drawImage(cropCanvas, 0, 0);
+    preprocessImage(ocrCanvas);
+    const ocrDataUrl = ocrCanvas.toDataURL('image/jpeg', 0.9);
+    
+    setCapturedImage(originalCroppedDataUrl);
     stopCamera();
-    runOCR(croppedDataUrl);
+    runOCR(ocrDataUrl);
   };
 
   const handleFileUpload = (e) => {
@@ -274,9 +338,21 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (event) => {
       const dataUrl = event.target.result;
-      setCapturedImage(dataUrl);
+      const img = new Image();
+      img.onload = () => {
+        setCapturedImage(dataUrl);
+        
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = img.width;
+        tempCanvas.height = img.height;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.drawImage(img, 0, 0);
+        preprocessImage(tempCanvas);
+        
+        runOCR(tempCanvas.toDataURL('image/jpeg', 0.9));
+      };
+      img.src = dataUrl;
       stopCamera();
-      runOCR(dataUrl);
     };
     reader.readAsDataURL(file);
   };
@@ -529,24 +605,23 @@ export default function App() {
   const runOCR = async (imageSrc) => {
     setOcrProgress(0);
     setOcrStatusText('Menyiapkan Mesin OCR...');
+    let worker = null;
     try {
-      const Tesseract = await import('tesseract.js');
+      const { createWorker } = await import('tesseract.js');
+      worker = await createWorker('eng');
+      
+      // Limit OCR to only allow digits and decimal separators
+      await worker.setParameters({
+        tessedit_char_whitelist: '0123456789., ',
+      });
+      
       setOcrStatusText('Memindai Gambar...');
-      const result = await Tesseract.recognize(
-        imageSrc,
-        'eng',
-        {
-          logger: m => {
-            if (m.status === 'recognizing') {
-              setOcrProgress(Math.round(m.progress * 100));
-              setOcrStatusText(`Membaca Angka: ${Math.round(m.progress * 100)}%`);
-            }
-          }
-        }
-      );
-      const rawText = result.data.text;
-      console.log("OCR Result Text:", rawText);
-      const detectedTemp = parseTemperatureText(rawText);
+      setOcrProgress(50);
+      
+      const { data: { text } } = await worker.recognize(imageSrc);
+      console.log("OCR Raw Whitelisted Text:", text);
+      
+      const detectedTemp = parseTemperatureText(text);
       
       if (detectedTemp) {
         setFormTemp(detectedTemp);
@@ -559,29 +634,37 @@ export default function App() {
       console.error("OCR Error:", err);
       showToast("Gagal memproses gambar otomatis. Silakan isi manual.", "error");
       setOcrProgress(-1);
+    } finally {
+      if (worker) {
+        await worker.terminate();
+      }
     }
   };
 
   const parseTemperatureText = (text) => {
     if (!text) return '';
-    let cleaned = text
-      .replace(/[bB]/g, '6')
-      .replace(/[oO]/g, '0')
-      .replace(/[sS]/g, '5')
-      .replace(/[iIl|]/g, '1')
-      .replace(/[zZ]/g, '2')
-      .replace(/[gG]/g, '9')
-      .replace(/[aA]/g, '4')
-      .replace(/q/g, '9');
-      
-    const decimalMatch = cleaned.match(/(\d+)[\.,\s](\d)/);
+    
+    // Replace commas with dots and strip whitespaces/newlines
+    let cleaned = text.replace(/,/g, '.').replace(/[\r\n\s]+/g, '');
+    
+    // 1. Try finding decimal numbers (e.g. 28.3)
+    const decimalMatch = cleaned.match(/(\d+)[\.](\d)/);
     if (decimalMatch) {
       return `${decimalMatch[1]}.${decimalMatch[2]}`;
     }
     
-    const intMatch = cleaned.match(/(\d+)/);
-    if (intMatch) {
-      return `${intMatch[1]}.0`;
+    // 2. Fallback: If no decimal point found, but a string of digits (e.g. 283 -> 28.3)
+    const digitMatch = cleaned.match(/(\d+)/);
+    if (digitMatch) {
+      const digits = digitMatch[1];
+      if (digits.length >= 3) {
+        const integerPart = digits.slice(0, -1);
+        const decimalPart = digits.slice(-1);
+        return `${integerPart}.${decimalPart}`;
+      } else if (digits.length === 2) {
+        return `${digits}.0`;
+      }
+      return `${digits}.0`;
     }
     return '';
   };
@@ -686,6 +769,54 @@ export default function App() {
     }
   };
 
+  // --- CLOUD SYNC MANAGEMENT (SUPABASE) ---
+  const handleSaveSupabaseConfig = async (e) => {
+    e.preventDefault();
+    setSyncLoading(true);
+    const success = await db.testSupabaseConnection(cloudUrl, cloudKey);
+    if (success) {
+      db.saveSupabaseConfig(cloudUrl, cloudKey);
+      showToast("Koneksi Supabase Cloud berhasil disimpan!", "success");
+      
+      // Trigger sync immediately!
+      try {
+        const res = await db.syncWithCloud();
+        if (res) {
+          setReports(res.reports);
+          setAttendance(res.attendance);
+          showToast("Sinkronisasi data awal berhasil!", "success");
+        }
+      } catch (err) {
+        showToast("Gagal melakukan sinkronisasi data awal.", "error");
+      }
+    } else {
+      showToast("Koneksi Supabase gagal. Periksa kembali URL dan API Key Anda.", "error");
+    }
+    setSyncLoading(false);
+  };
+
+  const handleManualSync = async () => {
+    if (!cloudUrl || !cloudKey) {
+      showToast("Harap konfigurasi cloud database terlebih dahulu!", "error");
+      return;
+    }
+    setSyncLoading(true);
+    try {
+      const res = await db.syncWithCloud();
+      if (res) {
+        setReports(res.reports);
+        setAttendance(res.attendance);
+        showToast("Sinkronisasi cloud berhasil diselesaikan!", "success");
+      } else {
+        showToast("Koneksi cloud belum dikonfigurasi.", "error");
+      }
+    } catch (err) {
+      showToast("Gagal melakukan sinkronisasi. Periksa koneksi internet.", "error");
+    } finally {
+      setSyncLoading(false);
+    }
+  };
+
   // --- SETTINGS MANAGEMENT ---
   const handleSaveSettings = (e) => {
     e.preventDefault();
@@ -771,6 +902,11 @@ export default function App() {
 
   // --- FILTERS & ANALYTICS ---
   const filteredReports = reports.filter(r => {
+    // Role-based filter: Operator only sees their own reports
+    if (currentUser && currentUser.role === 'Operator') {
+      if (r.officer !== currentUser.name) return false;
+    }
+    
     const matchLocation = filterLocation === 'Semua' || r.location === filterLocation;
     const statusObj = db.getTemperatureStatus(r.temperature, settings);
     const matchStatus = filterStatus === 'Semua' || statusObj.label.includes(filterStatus);
@@ -786,6 +922,11 @@ export default function App() {
   });
 
   const filteredAttendance = attendance.filter(a => {
+    // Role-based filter: Operator only sees their own attendance logs
+    if (currentUser && currentUser.role === 'Operator') {
+      if (a.officer !== currentUser.name) return false;
+    }
+    
     const matchOfficer = filterAttOfficer === 'Semua' || a.officer === filterAttOfficer;
     const matchType = filterAttType === 'Semua' || a.type === filterAttType;
 
@@ -800,7 +941,16 @@ export default function App() {
 
   const getStats = () => {
     const todayStr = new Date().toDateString();
-    const todayReports = reports.filter(r => new Date(r.timestamp).toDateString() === todayStr);
+    
+    // Filter reports based on Operator name first
+    const visibleReports = reports.filter(r => {
+      if (currentUser && currentUser.role === 'Operator') {
+        return r.officer === currentUser.name;
+      }
+      return true;
+    });
+    
+    const todayReports = visibleReports.filter(r => new Date(r.timestamp).toDateString() === todayStr);
     
     const total = todayReports.length;
     let maxT = '-';
@@ -818,14 +968,22 @@ export default function App() {
       totalToday: total,
       maxTempToday: maxT,
       alertCount: abnormalCount,
-      allTimeTotal: reports.length
+      allTimeTotal: visibleReports.length
     };
   };
 
   const stats = getStats();
 
   const renderDashboardChart = () => {
-    const chartData = [...reports]
+    // Filter reports based on Operator name first
+    const visibleReports = reports.filter(r => {
+      if (currentUser && currentUser.role === 'Operator') {
+        return r.officer === currentUser.name;
+      }
+      return true;
+    });
+
+    const chartData = [...visibleReports]
       .slice(0, 7)
       .reverse();
       
@@ -1807,6 +1965,93 @@ export default function App() {
                     <button className="tag-remove" onClick={() => handleDeleteLocation(loc)}>×</button>
                   </div>
                 ))}
+              </div>
+            </div>
+
+            {/* Cloud Sync Config (Supabase) */}
+            <div className="glass-card">
+              <h3 className="section-title">
+                <RefreshCw size={16} style={{ color: 'var(--primary)', animation: syncLoading ? 'spin 2s linear infinite' : 'none' }} />
+                Sinkronisasi Cloud (Supabase)
+              </h3>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '14px' }}>
+                Hubungkan aplikasi ini ke Cloud Database Supabase agar data otomatis sinkron antardevice (HP & Laptop).
+              </p>
+              
+              <form onSubmit={handleSaveSupabaseConfig} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <div className="form-group">
+                  <label>Supabase URL</label>
+                  <input 
+                    type="text" 
+                    placeholder="https://xxxx.supabase.co" 
+                    className="form-control"
+                    value={cloudUrl}
+                    onChange={(e) => setCloudUrl(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Supabase Anon Key / API Key</label>
+                  <input 
+                    type="password" 
+                    placeholder="eyJhbGciOi..." 
+                    className="form-control"
+                    value={cloudKey}
+                    onChange={(e) => setCloudKey(e.target.value)}
+                    required
+                  />
+                </div>
+                
+                <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                  <button type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={syncLoading}>
+                    {syncLoading ? 'Menguji Koneksi...' : 'Simpan & Hubungkan'}
+                  </button>
+                  <button type="button" className="btn btn-secondary" onClick={handleManualSync} style={{ flex: 1 }} disabled={syncLoading || !cloudUrl || !cloudKey}>
+                    <RefreshCw size={12} style={{ marginRight: '4px', display: 'inline', animation: syncLoading ? 'spin 1.5s linear infinite' : 'none' }} /> Sync Manual
+                  </button>
+                </div>
+              </form>
+
+              {/* SQL script helper */}
+              <div style={{ marginTop: '16px', background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '8px', border: '1px solid var(--card-border)' }}>
+                <span style={{ fontSize: '0.65rem', fontWeight: 'bold', display: 'block', marginBottom: '6px', color: 'var(--text-secondary)' }}>
+                  📋 SQL SCHEMA UNTUK SUPABASE (PENGATURAN AWAL):
+                </span>
+                <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', display: 'block', marginBottom: '8px' }}>
+                  Copy-paste kode SQL di bawah ini ke SQL Editor di akun Supabase Anda, lalu klik "Run" untuk membuat tabel:
+                </span>
+                <textarea
+                  readOnly
+                  className="form-control"
+                  style={{ fontFamily: 'monospace', fontSize: '0.55rem', height: '110px', resize: 'none', background: '#0e1117', color: '#10b981', border: '1px solid #1f2937' }}
+                  value={`-- 1. Buat tabel reports
+CREATE TABLE IF NOT EXISTS reports (
+    id TEXT PRIMARY KEY,
+    timestamp TIMESTAMPTZ,
+    temperature FLOAT8,
+    location TEXT,
+    officer TEXT,
+    notes TEXT,
+    image TEXT
+);
+
+-- 2. Buat tabel attendance
+CREATE TABLE IF NOT EXISTS attendance (
+    id TEXT PRIMARY KEY,
+    timestamp TIMESTAMPTZ,
+    officer TEXT,
+    type TEXT,
+    image TEXT,
+    latitude FLOAT8,
+    longitude FLOAT8,
+    gps_accuracy FLOAT8,
+    is_fake_gps BOOLEAN
+);
+
+-- 3. Nonaktifkan RLS (agar mudah diakses frontend)
+ALTER TABLE reports DISABLE ROW LEVEL SECURITY;
+ALTER TABLE attendance DISABLE ROW LEVEL SECURITY;`}
+                />
               </div>
             </div>
 
