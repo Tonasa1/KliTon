@@ -380,11 +380,12 @@ export const db = {
 
   async testSupabaseConnection(url, key) {
     try {
+      const cleanedUrl = url.trim().replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
       const headers = {
         'apikey': key,
         'Authorization': `Bearer ${key}`
       };
-      const res = await fetch(`${url}/rest/v1/reports?select=id&limit=1`, { headers });
+      const res = await fetch(`${cleanedUrl}/rest/v1/reports?select=id&limit=1`, { headers });
       return res.ok;
     } catch (e) {
       console.error('Connection test failed:', e);
