@@ -410,7 +410,20 @@ export const db = {
       const cloudReports = reportsRes.ok ? await reportsRes.json() : [];
 
       const attRes = await fetch(`${url}/rest/v1/attendance?select=*`, { headers });
-      const cloudAtt = attRes.ok ? await attRes.json() : [];
+      let cloudAtt = attRes.ok ? await attRes.json() : [];
+      
+      // Convert cloud snake_case keys to camelCase for local React state
+      cloudAtt = cloudAtt.map(a => ({
+        id: a.id,
+        timestamp: a.timestamp,
+        officer: a.officer,
+        type: a.type,
+        image: a.image,
+        latitude: a.latitude,
+        longitude: a.longitude,
+        gpsAccuracy: a.gps_accuracy,
+        isFakeGps: a.is_fake_gps
+      }));
 
       // 2. Merge Reports
       const localReports = this.getReports();
@@ -455,10 +468,21 @@ export const db = {
       const attToUpload = localAtt.filter(a => !cloudAttIds.has(a.id));
       
       for (const a of attToUpload) {
+        const mapped = {
+          id: a.id,
+          timestamp: a.timestamp,
+          officer: a.officer,
+          type: a.type,
+          image: a.image,
+          latitude: a.latitude,
+          longitude: a.longitude,
+          gps_accuracy: a.gpsAccuracy,
+          is_fake_gps: a.isFakeGps
+        };
         await fetch(`${url}/rest/v1/attendance`, {
           method: 'POST',
           headers,
-          body: JSON.stringify(a)
+          body: JSON.stringify(mapped)
         });
       }
 
@@ -497,10 +521,23 @@ export const db = {
         'Authorization': `Bearer ${key}`,
         'Content-Type': 'application/json'
       };
+      
+      const mapped = {
+        id: attendance.id,
+        timestamp: attendance.timestamp,
+        officer: attendance.officer,
+        type: attendance.type,
+        image: attendance.image,
+        latitude: attendance.latitude,
+        longitude: attendance.longitude,
+        gps_accuracy: attendance.gpsAccuracy,
+        is_fake_gps: attendance.isFakeGps
+      };
+
       await fetch(`${url}/rest/v1/attendance`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(attendance)
+        body: JSON.stringify(mapped)
       });
     } catch (e) {
       console.error("Failed to upload attendance to cloud:", e);
