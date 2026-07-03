@@ -6,6 +6,9 @@ const SETTINGS_KEY = 'thermascan_settings';
 const OFFICERS_KEY = 'thermascan_officers';
 const ATTENDANCE_KEY = 'thermascan_attendance';
 const SESSION_KEY = 'thermascan_session';
+const ACTIVITIES_KEY = 'thermascan_activities';
+const INSPEKSI_LOCATIONS_KEY = 'thermascan_inspeksi_locations';
+const ANALIS_LOCATIONS_KEY = 'thermascan_analis_locations';
 
 const DEFAULT_OFFICERS = [
   'FAHRIL',
@@ -25,9 +28,29 @@ const DEFAULT_LOCATIONS = [
   'Lainnya...'
 ];
 
+const DEFAULT_INSPEKSI_LOCATIONS = [
+  'Area Produksi',
+  'Gudang Bahan Baku',
+  'Ruang Kontrol',
+  'Area Conveyor',
+  'Lainnya...'
+];
+
+const DEFAULT_ANALIS_LOCATIONS = [
+  'Laboratorium Utama',
+  'Lab Kimia',
+  'Lab Fisika',
+  'Area Sampling',
+  'Lainnya...'
+];
+
 const DEFAULT_SETTINGS = {
   highTempAlert: 60.0, // Warning threshold for industrial machines
-  feverTempAlert: 80.0  // Danger threshold for industrial machines
+  feverTempAlert: 80.0, // Danger threshold for industrial machines
+  enableGeofence: false,
+  geofenceLat: -6.200000,
+  geofenceLon: 106.816666,
+  geofenceRadius: 100
 };
 
 // Initialize default data if not present
@@ -46,27 +69,36 @@ if (!localStorage.getItem(REPORTS_KEY)) {
 if (!localStorage.getItem(ATTENDANCE_KEY)) {
   localStorage.setItem(ATTENDANCE_KEY, JSON.stringify([]));
 }
+if (!localStorage.getItem(ACTIVITIES_KEY)) {
+  localStorage.setItem(ACTIVITIES_KEY, JSON.stringify([]));
+}
+if (!localStorage.getItem(INSPEKSI_LOCATIONS_KEY)) {
+  localStorage.setItem(INSPEKSI_LOCATIONS_KEY, JSON.stringify(DEFAULT_INSPEKSI_LOCATIONS));
+}
+if (!localStorage.getItem(ANALIS_LOCATIONS_KEY)) {
+  localStorage.setItem(ANALIS_LOCATIONS_KEY, JSON.stringify(DEFAULT_ANALIS_LOCATIONS));
+}
 
 export const db = {
   // --- SESSION LOGIN SYSTEM ---
-  login(role, username, password) {
+  login(role, username, password, jobdesk = 'suhu') {
     // Basic verification logic
     if (role === 'Administrator') {
       if (username.toLowerCase() === 'admin' && password === 'admin123') {
-        const session = { role, name: 'Administrator' };
+        const session = { role, name: 'Administrator', jobdesk };
         localStorage.setItem(SESSION_KEY, JSON.stringify(session));
         return session;
       }
     } else if (role === 'Supervisor') {
       if (username.toLowerCase() === 'supervisor' && password === 'spv123') {
-        const session = { role, name: 'Supervisor' };
+        const session = { role, name: 'Supervisor', jobdesk };
         localStorage.setItem(SESSION_KEY, JSON.stringify(session));
         return session;
       }
     } else if (role === 'Operator') {
       const officers = this.getOfficers();
       if (officers.includes(username) && password === 'operator123') {
-        const session = { role, name: username };
+        const session = { role, name: username, jobdesk };
         localStorage.setItem(SESSION_KEY, JSON.stringify(session));
         return session;
       }
@@ -187,6 +219,55 @@ export const db = {
     }
   },
 
+  // --- ACTIVITIES (Kegiatan Inspeksi & Analis) ---
+  getActivities() {
+    try {
+      const data = localStorage.getItem(ACTIVITIES_KEY);
+      return data ? JSON.parse(data).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)) : [];
+    } catch (e) {
+      console.error('Failed to parse activities:', e);
+      return [];
+    }
+  },
+
+  saveActivity(activity) {
+    try {
+      const list = this.getActivities();
+      const newEntry = {
+        id: `act_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        timestamp: new Date().toISOString(),
+        ...activity
+      };
+      list.push(newEntry);
+      localStorage.setItem(ACTIVITIES_KEY, JSON.stringify(list));
+      this.uploadActivityToCloud(newEntry);
+      return newEntry;
+    } catch (e) {
+      console.error('Failed to save activity:', e);
+      return null;
+    }
+  },
+
+  deleteActivity(id) {
+    try {
+      const list = this.getActivities();
+      const filtered = list.filter(a => a.id !== id);
+      localStorage.setItem(ACTIVITIES_KEY, JSON.stringify(filtered));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  },
+
+  clearAllActivities() {
+    try {
+      localStorage.setItem(ACTIVITIES_KEY, JSON.stringify([]));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  },
+
   // --- OFFICERS (Petugas) ---
   getOfficers() {
     try {
@@ -259,11 +340,59 @@ export const db = {
     }
   },
 
+  // --- LOCATIONS PER JOBDESK ---
+  getLocationsByJobdesk(jobdesk) {
+    if (jobdesk === 'inspeksi') {
+      try {
+        const data = localStorage.getItem(INSPEKSI_LOCATIONS_KEY);
+        return data ? JSON.parse(data) : DEFAULT_INSPEKSI_LOCATIONS;
+      } catch (e) {
+        return DEFAULT_INSPEKSI_LOCATIONS;
+      }
+    } else if (jobdesk === 'analis') {
+      try {
+        const data = localStorage.getItem(ANALIS_LOCATIONS_KEY);
+        return data ? JSON.parse(data) : DEFAULT_ANALIS_LOCATIONS;
+      } catch (e) {
+        return DEFAULT_ANALIS_LOCATIONS;
+      }
+    }
+    return this.getLocations(); // default: suhu
+  },
+
+  saveLocationByJobdesk(jobdesk, location) {
+    const key = jobdesk === 'inspeksi' ? INSPEKSI_LOCATIONS_KEY : jobdesk === 'analis' ? ANALIS_LOCATIONS_KEY : LOCATIONS_KEY;
+    try {
+      const locations = this.getLocationsByJobdesk(jobdesk);
+      const trimmed = location.trim();
+      if (trimmed && !locations.includes(trimmed)) {
+        locations.push(trimmed);
+        localStorage.setItem(key, JSON.stringify(locations));
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  },
+
+  deleteLocationByJobdesk(jobdesk, location) {
+    const key = jobdesk === 'inspeksi' ? INSPEKSI_LOCATIONS_KEY : jobdesk === 'analis' ? ANALIS_LOCATIONS_KEY : LOCATIONS_KEY;
+    try {
+      const locations = this.getLocationsByJobdesk(jobdesk);
+      const filtered = locations.filter(l => l !== location);
+      localStorage.setItem(key, JSON.stringify(filtered));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  },
+
   // --- SETTINGS ---
   getSettings() {
     try {
       const data = localStorage.getItem(SETTINGS_KEY);
-      return data ? JSON.parse(data) : DEFAULT_SETTINGS;
+      return data ? { ...DEFAULT_SETTINGS, ...JSON.parse(data) } : DEFAULT_SETTINGS;
     } catch (e) {
       return DEFAULT_SETTINGS;
     }
@@ -332,7 +461,7 @@ export const db = {
     if (!attendanceList || attendanceList.length === 0) return false;
 
     // Header
-    const headers = ['ID Absen', 'Waktu Absen', 'Nama Petugas', 'Tipe Absensi', 'Latitude', 'Longitude', 'Akurasi GPS (m)', 'Link Google Maps', 'Terindikasi Fake GPS'];
+    const headers = ['ID Absen', 'Waktu Absen', 'Nama Petugas', 'Tipe Absensi', 'Latitude', 'Longitude', 'Akurasi GPS (m)', 'Link Google Maps', 'Terindikasi Fake GPS', 'Keterangan/Alasan'];
 
     // Rows
     const rows = attendanceList.map(a => {
@@ -350,7 +479,8 @@ export const db = {
         a.longitude || '-',
         a.gpsAccuracy || '-',
         mapsLink,
-        a.isFakeGps ? 'YA' : 'TIDAK'
+        a.isFakeGps ? 'YA' : 'TIDAK',
+        a.notes ? a.notes.replace(/\n/g, ' ') : '-'
       ];
     });
 
@@ -360,6 +490,36 @@ export const db = {
     ].join('\r\n');
 
     this.downloadFile(csvContent, 'Laporan_Absensi_ThermaScan');
+    return true;
+  },
+
+  exportActivitiesToCSV(activities) {
+    if (!activities || activities.length === 0) return false;
+
+    const headers = ['ID Kegiatan', 'Waktu', 'Jobdesk', 'Nama Petugas', 'Lokasi', 'Keterangan Kegiatan', 'Catatan Tambahan'];
+
+    const rows = activities.map(a => {
+      const formattedDate = new Date(a.timestamp).toLocaleString('id-ID', {
+        dateStyle: 'medium',
+        timeStyle: 'medium'
+      });
+      return [
+        a.id,
+        formattedDate,
+        a.jobdesk || '-',
+        a.officer || '-',
+        a.location || '-',
+        a.description ? a.description.replace(/\n/g, ' ') : '-',
+        a.notes ? a.notes.replace(/\n/g, ' ') : '-'
+      ];
+    });
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))
+    ].join('\r\n');
+
+    this.downloadFile(csvContent, 'Laporan_Kegiatan_ThermaScan');
     return true;
   },
 
@@ -486,7 +646,40 @@ export const db = {
         });
       }
 
-      return { reports: mergedReports, attendance: mergedAtt };
+      // 6. Fetch activities from cloud
+      let cloudActivities = [];
+      try {
+        const actRes = await fetch(`${url}/rest/v1/activities?select=*`, { headers });
+        cloudActivities = actRes.ok ? await actRes.json() : [];
+      } catch (e) {
+        // Table might not exist yet, that's ok
+      }
+
+      // 7. Merge Activities
+      const localActivities = this.getActivities();
+      const mergedActMap = new Map();
+      cloudActivities.forEach(a => mergedActMap.set(a.id, a));
+      localActivities.forEach(a => mergedActMap.set(a.id, a));
+      const mergedActivities = Array.from(mergedActMap.values())
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      localStorage.setItem(ACTIVITIES_KEY, JSON.stringify(mergedActivities));
+
+      // 8. Upload missing local activities to cloud
+      const cloudActIds = new Set(cloudActivities.map(a => a.id));
+      const actToUpload = localActivities.filter(a => !cloudActIds.has(a.id));
+      for (const a of actToUpload) {
+        try {
+          await fetch(`${url}/rest/v1/activities`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(a)
+          });
+        } catch (e) {
+          // Ignore if table doesn't exist
+        }
+      }
+
+      return { reports: mergedReports, attendance: mergedAtt, activities: mergedActivities };
     } catch (e) {
       console.error("Sync failed:", e);
       throw e;
@@ -541,6 +734,25 @@ export const db = {
       });
     } catch (e) {
       console.error("Failed to upload attendance to cloud:", e);
+    }
+  },
+
+  async uploadActivityToCloud(activity) {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return;
+    try {
+      const headers = {
+        'apikey': key,
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json'
+      };
+      await fetch(`${url}/rest/v1/activities`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(activity)
+      });
+    } catch (e) {
+      console.error("Failed to upload activity to cloud:", e);
     }
   },
 
