@@ -1546,11 +1546,12 @@ export default function App() {
           </form>
 
           {/* Quick Helper Default Credentials */}
-          <div style={{ marginTop: '24px', background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '8px', border: '1px solid var(--card-border)', fontSize: '0.65rem', color: 'var(--text-muted)', lineHeight: '1.4' }}>
-            <span style={{ fontWeight: 'bold', display: 'block', marginBottom: '4px', color: 'var(--text-secondary)' }}>KUNCI AKUN DEMO:</span>
-            Admin: <strong>admin</strong> / sandi: <strong>admin123</strong><br />
-            Spv: <strong>supervisor</strong> / sandi: <strong>spv123</strong><br />
-            Operator: Pilih Nama / sandi: <strong>operator123</strong>
+          <div style={{ marginTop: '24px', background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '8px', border: '1px solid var(--card-border)', fontSize: '0.65rem', color: 'var(--text-muted)', lineHeight: '1.8' }}>
+            <span style={{ fontWeight: 'bold', display: 'block', marginBottom: '6px', color: 'var(--text-secondary)' }}>🔑 KUNCI AKUN:</span>
+            <span>👤 Admin: <strong style={{color:'var(--text-primary)'}}>admin</strong> / sandi: <strong style={{color:'var(--primary)'}}>admin123</strong></span><br />
+            <span>👤 Manager: <strong style={{color:'var(--text-primary)'}}>manager1</strong> / sandi: <strong style={{color:'var(--primary)'}}>manager123</strong></span><br />
+            <span>👤 Supervisor: <strong style={{color:'var(--text-primary)'}}>supervisor</strong> / sandi: <strong style={{color:'var(--primary)'}}>spv123</strong></span><br />
+            <span>👤 Operator: Pilih Nama / sandi: <strong style={{color:'var(--primary)'}}>operator123</strong></span>
           </div>
         </div>
       </div>
