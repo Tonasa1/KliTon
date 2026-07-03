@@ -366,8 +366,8 @@ export const db = {
   // --- CLOUD SYNC CONFIG (SUPABASE) ---
   getSupabaseConfig() {
     return {
-      url: localStorage.getItem('thermascan_supabase_url') || '',
-      key: localStorage.getItem('thermascan_supabase_key') || ''
+      url: localStorage.getItem('thermascan_supabase_url') || 'https://pwfmkjexbxuucnxmcvpp.supabase.co',
+      key: localStorage.getItem('thermascan_supabase_key') || 'sb_publishable_rKK-Hev-JCnfa_UI-Kjwog_3twu3_nG'
     };
   },
 
