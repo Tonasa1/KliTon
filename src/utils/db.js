@@ -372,7 +372,8 @@ export const db = {
   },
 
   saveSupabaseConfig(url, key) {
-    localStorage.setItem('thermascan_supabase_url', url.trim());
+    const cleanedUrl = url.trim().replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
+    localStorage.setItem('thermascan_supabase_url', cleanedUrl);
     localStorage.setItem('thermascan_supabase_key', key.trim());
     return true;
   },
