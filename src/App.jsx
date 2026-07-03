@@ -1003,6 +1003,7 @@ export default function App() {
         if (res) {
           setReports(res.reports);
           setAttendance(res.attendance);
+          setUsers(db.getUsers()); // Update users state
           showToast("Sinkronisasi data awal berhasil!", "success");
         }
       } catch (err) {
@@ -1025,6 +1026,7 @@ export default function App() {
       if (res) {
         setReports(res.reports);
         setAttendance(res.attendance);
+        setUsers(db.getUsers()); // Update users state
         showToast("Sinkronisasi cloud berhasil diselesaikan!", "success");
       } else {
         showToast("Koneksi cloud belum dikonfigurasi.", "error");
