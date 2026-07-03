@@ -96,12 +96,16 @@ const DEFAULT_SETTINGS = {
 if (!localStorage.getItem(OFFICERS_KEY)) {
   localStorage.setItem(OFFICERS_KEY, JSON.stringify(DEFAULT_OFFICERS));
 }
-// Always merge DEFAULT_USERS: add any new default users that don't exist yet in localStorage
+// Always merge DEFAULT_USERS: add new users AND update jobdesk/role/password of existing ones
 const _existingUsers = JSON.parse(localStorage.getItem(USERS_KEY) || '[]');
 const _mergedUsers = [..._existingUsers];
 DEFAULT_USERS.forEach(defUser => {
-  if (!_mergedUsers.find(u => u.username === defUser.username)) {
-    _mergedUsers.push(defUser);
+  const idx = _mergedUsers.findIndex(u => u.username === defUser.username);
+  if (idx === -1) {
+    _mergedUsers.push(defUser); // tambah user baru
+  } else {
+    // perbarui jobdesk, role, password jika ada perubahan dari kode
+    _mergedUsers[idx] = { ..._mergedUsers[idx], ...defUser };
   }
 });
 localStorage.setItem(USERS_KEY, JSON.stringify(_mergedUsers));
