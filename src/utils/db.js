@@ -312,6 +312,7 @@ export const db = {
         users.push(updatedUser);
       }
       localStorage.setItem(USERS_KEY, JSON.stringify(users));
+      this.uploadUserToCloud(updatedUser);
       return true;
     } catch (e) {
       return false;
@@ -323,6 +324,7 @@ export const db = {
       const users = this.getUsers();
       const filtered = users.filter(u => u.username.toLowerCase() !== username.toLowerCase());
       localStorage.setItem(USERS_KEY, JSON.stringify(filtered));
+      this.deleteUserFromCloud(username);
       return true;
     } catch (e) {
       return false;
@@ -336,6 +338,7 @@ export const db = {
       if (user && user.password === oldPassword) {
         user.password = newPassword;
         localStorage.setItem(USERS_KEY, JSON.stringify(users));
+        this.uploadUserToCloud(user);
         return true;
       }
       return false;
@@ -351,6 +354,7 @@ export const db = {
       if (user) {
         user.password = newPassword;
         localStorage.setItem(USERS_KEY, JSON.stringify(users));
+        this.uploadUserToCloud(user);
         return true;
       }
       return false;
@@ -869,6 +873,52 @@ export const db = {
         }
       }
 
+      // 9. Fetch users from cloud
+      let cloudUsers = [];
+      try {
+        const userRes = await fetch(`${url}/rest/v1/users?select=*`, { headers });
+        cloudUsers = userRes.ok ? await userRes.json() : [];
+      } catch (e) {
+        // Table might not exist yet
+      }
+
+      // 10. Merge Users
+      const localUsers = this.getUsers();
+      let mergedUsers = localUsers;
+      
+      if (cloudUsers.length > 0) {
+        const mergedUserMap = new Map();
+        localUsers.forEach(u => mergedUserMap.set(u.username.toLowerCase(), u));
+        cloudUsers.forEach(u => mergedUserMap.set(u.username.toLowerCase(), {
+          username: u.username,
+          role: u.role,
+          password: u.password,
+          jobdesk: u.jobdesk || 'suhu'
+        }));
+        mergedUsers = Array.from(mergedUserMap.values());
+        localStorage.setItem(USERS_KEY, JSON.stringify(mergedUsers));
+      }
+
+      // 11. Upload missing local users to cloud
+      const cloudUsernames = new Set(cloudUsers.map(u => u.username.toLowerCase()));
+      const usersToUpload = localUsers.filter(u => !cloudUsernames.has(u.username.toLowerCase()));
+      for (const u of usersToUpload) {
+        try {
+          await fetch(`${url}/rest/v1/users`, {
+            method: 'POST',
+            headers: { ...headers, 'Prefer': 'resolution=merge-duplicates' },
+            body: JSON.stringify({
+              username: u.username,
+              role: u.role,
+              password: u.password,
+              jobdesk: u.jobdesk || 'suhu'
+            })
+          });
+        } catch (e) {
+          // Ignore
+        }
+      }
+
       return { reports: mergedReports, attendance: mergedAtt, activities: mergedActivities };
     } catch (e) {
       console.error("Sync failed:", e);
@@ -1023,5 +1073,40 @@ export const db = {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  },
+
+  async uploadUserToCloud(user) {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return;
+    try {
+      const headers = { 'apikey': key, 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' };
+      // Attempt to upsert/merge the user based on unique constraint
+      await fetch(`${url}/rest/v1/users`, {
+        method: 'POST',
+        headers: { ...headers, 'Prefer': 'resolution=merge-duplicates' },
+        body: JSON.stringify({
+          username: user.username,
+          role: user.role,
+          password: user.password,
+          jobdesk: user.jobdesk || 'suhu'
+        })
+      });
+    } catch (e) {
+      console.error("Failed to upload user to cloud:", e);
+    }
+  },
+
+  async deleteUserFromCloud(username) {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return;
+    try {
+      const headers = { 'apikey': key, 'Authorization': `Bearer ${key}` };
+      await fetch(`${url}/rest/v1/users?username=eq.${username}`, {
+        method: 'DELETE',
+        headers
+      });
+    } catch (e) {
+      console.error("Failed to delete user from cloud:", e);
+    }
   }
 };
