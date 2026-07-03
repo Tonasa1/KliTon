@@ -22,7 +22,9 @@ import {
   UserCheck,
   ShieldAlert,
   LogOut,
-  Lock
+  Lock,
+  ClipboardList,
+  FlaskConical
 } from 'lucide-react';
 import { db } from './utils/db';
 
@@ -55,6 +57,21 @@ const preprocessImage = (canvas) => {
     data[i + 2] = val;
   }
   ctx.putImageData(imgData, 0, 0);
+};
+
+// Haversine Formula for Geofencing
+const calculateDistance = (lat1, lon1, lat2, lon2) => {
+  if (lat1 === null || lon1 === null || lat2 === null || lon2 === null) return null;
+  const R = 6371000; // Radius of Earth in meters
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const d = R * c;
+  return d; // Distance in meters
 };
 
 export default function App() {
@@ -92,6 +109,7 @@ export default function App() {
   const [attCameraActive, setAttCameraActive] = useState(false);
   const [attGpsLoading, setAttGpsLoading] = useState(false);
   const [attGpsData, setAttGpsData] = useState(null); // { latitude, longitude, accuracy, isFakeGps }
+  const [attNotes, setAttNotes] = useState('');
   
   // History Sub-Tab States
   const [historySubTab, setHistorySubTab] = useState('suhu'); // 'suhu' | 'absensi'
@@ -119,6 +137,25 @@ export default function App() {
   const [cloudKey, setCloudKey] = useState('');
   const [syncLoading, setSyncLoading] = useState(false);
 
+  // Jobdesk Selection State
+  const [selectedJobdesk, setSelectedJobdesk] = useState('suhu'); // 'suhu' | 'inspeksi' | 'analis'
+
+  // Activity States (Inspeksi & Analis)
+  const [activities, setActivities] = useState([]);
+  const [actImage, setActImage] = useState(null);
+  const [actCameraActive, setActCameraActive] = useState(false);
+  const [actFormDescription, setActFormDescription] = useState('');
+  const [actFormNotes, setActFormNotes] = useState('');
+  const [actFormLocation, setActFormLocation] = useState('');
+  const [actFormOfficer, setActFormOfficer] = useState('');
+  const [actLocations, setActLocations] = useState([]);
+  const [selectedActivity, setSelectedActivity] = useState(null);
+  const [historyActSubTab, setHistoryActSubTab] = useState('kegiatan'); // 'kegiatan' | 'absensi'
+  const [searchActQuery, setSearchActQuery] = useState('');
+  const [filterActLocation, setFilterActLocation] = useState('Semua');
+  const [settingManageJobdesk, setSettingManageJobdesk] = useState('suhu');
+  const [settingLocations, setSettingLocations] = useState([]);
+
   // Refs
   const videoRef = useRef(null);
   const attVideoRef = useRef(null);
@@ -128,6 +165,10 @@ export default function App() {
   const attFileInputRef = useRef(null);
   const streamRef = useRef(null);
   const attStreamRef = useRef(null);
+  const actVideoRef = useRef(null);
+  const actCanvasRef = useRef(null);
+  const actFileInputRef = useRef(null);
+  const actStreamRef = useRef(null);
 
   // Load initial data
   useEffect(() => {
@@ -148,6 +189,7 @@ export default function App() {
     
     const savedSettings = db.getSettings();
     setSettings(savedSettings);
+    setActivities(db.getActivities());
     
     // Set default values from db
     if (dbOfficers.length > 0) {
@@ -169,6 +211,7 @@ export default function App() {
         if (res) {
           setReports(res.reports);
           setAttendance(res.attendance);
+          if (res.activities) setActivities(res.activities);
           showToast("Data tersinkronisasi otomatis dengan Cloud DB.", "success");
         }
       }).catch(err => {
@@ -200,15 +243,33 @@ export default function App() {
       if (currentUser.role === 'Operator') {
         setFormOfficer(currentUser.name);
         setAttOfficer(currentUser.name);
+        setActFormOfficer(currentUser.name);
       } else {
         const dbOfficers = db.getOfficers();
         if (dbOfficers.length > 0) {
           setFormOfficer(dbOfficers[0]);
           setAttOfficer(dbOfficers[0]);
+          setActFormOfficer(dbOfficers[0]);
         }
       }
     }
   }, [currentUser]);
+
+  // Load locations based on jobdesk
+  useEffect(() => {
+    if (currentUser) {
+      if (currentUser.jobdesk === 'inspeksi' || currentUser.jobdesk === 'analis') {
+        setActLocations(db.getLocationsByJobdesk(currentUser.jobdesk));
+        const locs = db.getLocationsByJobdesk(currentUser.jobdesk);
+        if (locs.length > 0) setActFormLocation(locs[0]);
+      }
+    }
+  }, [currentUser]);
+
+  // Sync settingLocations when settingManageJobdesk changes
+  useEffect(() => {
+    setSettingLocations(db.getLocationsByJobdesk(settingManageJobdesk));
+  }, [settingManageJobdesk, currentUser]);
 
   // Show Toast Helper
   const showToast = (message, type = 'success') => {
@@ -226,7 +287,7 @@ export default function App() {
       return;
     }
 
-    const session = db.login(loginRole, loginUsername, loginPassword);
+    const session = db.login(loginRole, loginUsername, loginPassword, selectedJobdesk);
     if (session) {
       setCurrentUser(session);
       showToast(`Login berhasil sebagai ${session.name}!`, "success");
@@ -247,9 +308,12 @@ export default function App() {
       setCurrentUser(null);
       stopCamera();
       stopAttCamera();
+      stopActCamera();
       setCapturedImage(null);
       setAttImage(null);
       setAttGpsData(null);
+      setAttNotes('');
+      setActImage(null);
       showToast("Anda telah keluar dari aplikasi.", "success");
     }
   };
@@ -390,6 +454,64 @@ export default function App() {
       attVideoRef.current.srcObject = null;
     }
     setAttCameraActive(false);
+  };
+
+  // --- CAMERA MANAGEMENT (Kegiatan/Activity) ---
+  const startActCamera = async () => {
+    setActImage(null);
+    try {
+      setActCameraActive(true);
+      setTimeout(async () => {
+        if (!actVideoRef.current) return;
+        const constraints = {
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false
+        };
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        actStreamRef.current = stream;
+        actVideoRef.current.srcObject = stream;
+        actVideoRef.current.play();
+      }, 300);
+    } catch (err) {
+      console.error("Activity camera error:", err);
+      showToast("Gagal mengakses kamera.", "error");
+      setActCameraActive(false);
+    }
+  };
+
+  const stopActCamera = () => {
+    if (actStreamRef.current) {
+      actStreamRef.current.getTracks().forEach(track => track.stop());
+      actStreamRef.current = null;
+    }
+    if (actVideoRef.current) {
+      actVideoRef.current.srcObject = null;
+    }
+    setActCameraActive(false);
+  };
+
+  const captureActPhoto = () => {
+    if (!actVideoRef.current || !actCanvasRef.current) return;
+    const video = actVideoRef.current;
+    const canvas = actCanvasRef.current;
+    const ctx = canvas.getContext('2d');
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    setActImage(dataUrl);
+    stopActCamera();
+  };
+
+  const handleActFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setActImage(event.target.result);
+      stopActCamera();
+    };
+    reader.readAsDataURL(file);
   };
 
   // Watermark helper to draw Timemark information on captured or uploaded photos
@@ -723,7 +845,8 @@ export default function App() {
       latitude: attGpsData ? attGpsData.latitude : null,
       longitude: attGpsData ? attGpsData.longitude : null,
       gpsAccuracy: attGpsData ? attGpsData.accuracy : null,
-      isFakeGps: attGpsData ? attGpsData.isFakeGps : false
+      isFakeGps: attGpsData ? attGpsData.isFakeGps : false,
+      notes: ['Check In', 'Check Out'].includes(attType) ? '' : attNotes
     };
 
     const saved = db.saveAttendance(newAttendance);
@@ -732,10 +855,61 @@ export default function App() {
       setAttendance(db.getAttendance());
       setAttImage(null);
       setAttGpsData(null);
+      setAttNotes('');
       setHistorySubTab('absensi');
       setActiveTab('history');
     } else {
       showToast("Gagal menyimpan absensi.", "error");
+    }
+  };
+
+  // --- ACTIVITY SUBMISSION ---
+  const handleSubmitActivity = (e) => {
+    e.preventDefault();
+    if (!actImage) {
+      showToast("Harap ambil atau unggah foto kegiatan!", "error");
+      return;
+    }
+    if (!actFormDescription.trim()) {
+      showToast("Harap isi keterangan kegiatan!", "error");
+      return;
+    }
+    const newActivity = {
+      jobdesk: currentUser.jobdesk,
+      officer: currentUser.role === 'Operator' ? currentUser.name : actFormOfficer,
+      location: actFormLocation,
+      description: actFormDescription,
+      notes: actFormNotes,
+      image: actImage
+    };
+    const saved = db.saveActivity(newActivity);
+    if (saved) {
+      showToast("Laporan kegiatan berhasil disimpan!", "success");
+      setActivities(db.getActivities());
+      setActImage(null);
+      setActFormDescription('');
+      setActFormNotes('');
+      setHistoryActSubTab('kegiatan');
+      setActiveTab('history');
+    } else {
+      showToast("Gagal menyimpan laporan kegiatan.", "error");
+    }
+  };
+
+  const handleDeleteActivity = (id) => {
+    if (window.confirm("Apakah Anda yakin ingin menghapus kegiatan ini?")) {
+      db.deleteActivity(id);
+      setActivities(db.getActivities());
+      showToast("Kegiatan berhasil dihapus.", "success");
+      setSelectedActivity(null);
+    }
+  };
+
+  const handleResetActivities = () => {
+    if (window.confirm("PERINGATAN: Semua data kegiatan akan DIHAPUS PERMANEN. Lanjutkan?")) {
+      db.clearAllActivities();
+      setActivities([]);
+      showToast("Seluruh data kegiatan telah dikosongkan.", "success");
     }
   };
 
@@ -827,9 +1001,14 @@ export default function App() {
   const handleAddLocation = (e) => {
     e.preventDefault();
     if (newLocationName.trim()) {
-      const success = db.saveLocation(newLocationName);
+      const success = db.saveLocationByJobdesk(settingManageJobdesk, newLocationName);
       if (success) {
-        setLocations(db.getLocations());
+        setSettingLocations(db.getLocationsByJobdesk(settingManageJobdesk));
+        if (settingManageJobdesk === 'suhu') {
+          setLocations(db.getLocationsByJobdesk('suhu'));
+        } else {
+          setActLocations(db.getLocationsByJobdesk(settingManageJobdesk));
+        }
         setNewLocationName('');
         setShowLocationInput(false);
         showToast("Lokasi baru ditambahkan!", "success");
@@ -840,12 +1019,17 @@ export default function App() {
   };
 
   const handleDeleteLocation = (loc) => {
-    if (locations.length <= 1) {
+    if (settingLocations.length <= 1) {
       showToast("Minimal harus menyisakan 1 lokasi.", "error");
       return;
     }
-    db.deleteLocation(loc);
-    setLocations(db.getLocations());
+    db.deleteLocationByJobdesk(settingManageJobdesk, loc);
+    setSettingLocations(db.getLocationsByJobdesk(settingManageJobdesk));
+    if (settingManageJobdesk === 'suhu') {
+      setLocations(db.getLocationsByJobdesk('suhu'));
+    } else {
+      setActLocations(db.getLocationsByJobdesk(settingManageJobdesk));
+    }
     showToast("Lokasi berhasil dihapus.", "success");
   };
 
@@ -937,6 +1121,25 @@ export default function App() {
       (a.isFakeGps ? 'fake' : '').includes(term);
 
     return matchOfficer && matchType && matchSearch;
+  });
+
+  const filteredActivities = activities.filter(a => {
+    // Role-based filter: Operator only sees their own activities
+    if (currentUser && currentUser.role === 'Operator') {
+      if (a.officer !== currentUser.name) return false;
+    }
+    // Jobdesk filter
+    if (currentUser && currentUser.jobdesk) {
+      if (a.jobdesk !== currentUser.jobdesk) return false;
+    }
+    const matchLocation = filterActLocation === 'Semua' || a.location === filterActLocation;
+    const term = searchActQuery.toLowerCase();
+    const matchSearch = 
+      (a.officer && a.officer.toLowerCase().includes(term)) ||
+      (a.location && a.location.toLowerCase().includes(term)) ||
+      (a.description && a.description.toLowerCase().includes(term)) ||
+      (a.notes && a.notes.toLowerCase().includes(term));
+    return matchLocation && matchSearch;
   });
 
   const getStats = () => {
@@ -1058,8 +1261,11 @@ export default function App() {
   const isTabVisible = (tabName) => {
     if (!currentUser) return false;
     const role = currentUser.role;
+    const jobdesk = currentUser.jobdesk || 'suhu';
     
-    if (tabName === 'dashboard' || tabName === 'scan' || tabName === 'history') return true;
+    if (tabName === 'dashboard' || tabName === 'history') return true;
+    if (tabName === 'scan') return jobdesk === 'suhu';
+    if (tabName === 'activity') return jobdesk === 'inspeksi' || jobdesk === 'analis';
     if (tabName === 'attendance') return role === 'Operator';
     if (tabName === 'settings') return role === 'Administrator';
     return false;
@@ -1100,6 +1306,36 @@ export default function App() {
                 <option value="Supervisor">Supervisor</option>
                 <option value="Administrator">Administrator</option>
               </select>
+            </div>
+
+            {/* Jobdesk Choice */}
+            <div className="form-group">
+              <label>Pilih Jobdesk</label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginTop: '6px' }}>
+                {[
+                  { value: 'suhu', label: 'Suhu', icon: '🌡️', desc: 'Pemantauan suhu' },
+                  { value: 'inspeksi', label: 'Inspeksi', icon: '🔍', desc: 'Kegiatan inspeksi' },
+                  { value: 'analis', label: 'Analis', icon: '🧪', desc: 'Kegiatan analis' }
+                ].map(jd => (
+                  <div 
+                    key={jd.value}
+                    onClick={() => setSelectedJobdesk(jd.value)}
+                    style={{
+                      padding: '10px 6px',
+                      borderRadius: '10px',
+                      border: selectedJobdesk === jd.value ? '2px solid var(--primary)' : '2px solid var(--card-border)',
+                      background: selectedJobdesk === jd.value ? 'rgba(99,102,241,0.1)' : 'transparent',
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    <div style={{ fontSize: '1.3rem', marginBottom: '4px' }}>{jd.icon}</div>
+                    <div style={{ fontSize: '0.7rem', fontWeight: '700', color: selectedJobdesk === jd.value ? 'var(--primary)' : 'var(--text-primary)' }}>{jd.label}</div>
+                    <div style={{ fontSize: '0.55rem', color: 'var(--text-muted)', marginTop: '2px' }}>{jd.desc}</div>
+                  </div>
+                ))}
+              </div>
             </div>
 
             {/* Username Selection/Input based on Role */}
@@ -1177,7 +1413,7 @@ export default function App() {
           </div>
           <div className="logo-text">
             <h1>ThermaScan</h1>
-            <span>{currentUser.name}</span>
+            <span>{currentUser.name} • {(currentUser.jobdesk || 'suhu').charAt(0).toUpperCase() + (currentUser.jobdesk || 'suhu').slice(1)}</span>
           </div>
         </div>
         
@@ -1239,12 +1475,21 @@ export default function App() {
 
             {/* Quick Action Banners */}
             <div style={{ display: 'grid', gridTemplateColumns: currentUser.role === 'Operator' ? '1fr 1fr' : '1fr', gap: '12px', marginBottom: '16px' }}>
-              <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: 0, padding: '14px', background: 'linear-gradient(135deg, rgba(99,102,241,0.1) 0%, rgba(168,85,247,0.1) 100%)' }}>
-                <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Pindai Suhu Alat</div>
-                <button className="btn btn-primary" onClick={() => { setActiveTab('scan'); startCamera(); }} style={{ padding: '8px 12px', fontSize: '0.75rem', borderRadius: '8px' }}>
-                  <Camera size={14} /> Pindai Suhu
-                </button>
-              </div>
+              {(currentUser.jobdesk || 'suhu') === 'suhu' ? (
+                <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: 0, padding: '14px', background: 'linear-gradient(135deg, rgba(99,102,241,0.1) 0%, rgba(168,85,247,0.1) 100%)' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>🌡️ Pindai Suhu Alat</div>
+                  <button className="btn btn-primary" onClick={() => { setActiveTab('scan'); startCamera(); }} style={{ padding: '8px 12px', fontSize: '0.75rem', borderRadius: '8px' }}>
+                    <Camera size={14} /> Pindai Suhu
+                  </button>
+                </div>
+              ) : (
+                <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: 0, padding: '14px', background: 'linear-gradient(135deg, rgba(99,102,241,0.1) 0%, rgba(168,85,247,0.1) 100%)' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{(currentUser.jobdesk || 'suhu') === 'inspeksi' ? '🔍' : '🧪'} Kegiatan {(currentUser.jobdesk || 'suhu') === 'inspeksi' ? 'Inspeksi' : 'Analis'}</div>
+                  <button className="btn btn-primary" onClick={() => { setActiveTab('activity'); startActCamera(); }} style={{ padding: '8px 12px', fontSize: '0.75rem', borderRadius: '8px' }}>
+                    <Camera size={14} /> Ambil Foto Kegiatan
+                  </button>
+                </div>
+              )}
               {currentUser.role === 'Operator' && (
                 <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: 0, padding: '14px', background: 'linear-gradient(135deg, rgba(16,185,129,0.1) 0%, rgba(99,102,241,0.1) 100%)' }}>
                   <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Absensi Petugas</div>
@@ -1449,6 +1694,145 @@ export default function App() {
           </div>
         )}
 
+        {/* ----------------- TAB: ACTIVITY (Kegiatan Inspeksi/Analis) ----------------- */}
+        {activeTab === 'activity' && isTabVisible('activity') && (
+          <div>
+            {!actCameraActive && !actImage && (
+              <div className="glass-card" style={{ textAlign: 'center', padding: '40px 20px' }}>
+                <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'var(--primary-glow)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', color: 'var(--primary)' }}>
+                  <Camera size={32} />
+                </div>
+                <h2 style={{ fontSize: '1.2rem', marginBottom: '8px' }}>Dokumentasi Kegiatan {(currentUser.jobdesk || 'inspeksi') === 'inspeksi' ? 'Inspeksi' : 'Analis'}</h2>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '24px' }}>
+                  Ambil foto kegiatan Anda di lapangan, lalu isi keterangan dan lokasi.
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <button className="btn btn-primary" onClick={startActCamera}>
+                    <Camera size={18} />
+                    Buka Kamera
+                  </button>
+                  <button className="btn btn-secondary" onClick={() => actFileInputRef.current.click()}>
+                    <ImageIcon size={18} />
+                    Unggah dari Galeri
+                  </button>
+                  <input 
+                    type="file" 
+                    ref={actFileInputRef} 
+                    style={{ display: 'none' }} 
+                    accept="image/*" 
+                    onChange={handleActFileUpload} 
+                  />
+                </div>
+              </div>
+            )}
+
+            {actCameraActive && (
+              <div className="glass-card" style={{ padding: '12px' }}>
+                <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', background: '#000', aspectRatio: '4/3' }}>
+                  <video ref={actVideoRef} style={{ width: '100%', height: '100%', objectFit: 'cover' }} playsInline muted />
+                </div>
+                <div className="upload-btn-container">
+                  <button className="btn btn-secondary" onClick={stopActCamera}>
+                    <X size={18} /> Batal
+                  </button>
+                  <button className="btn btn-primary" onClick={captureActPhoto}>
+                    <Camera size={18} /> Ambil Foto
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {actImage && (
+              <form onSubmit={handleSubmitActivity}>
+                <div className="glass-card">
+                  <h3 className="section-title">
+                    <ClipboardList size={16} style={{ color: 'var(--primary)' }} />
+                    Laporan Kegiatan {(currentUser.jobdesk || 'inspeksi') === 'inspeksi' ? 'Inspeksi' : 'Analis'}
+                  </h3>
+                  
+                  <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', alignItems: 'center' }}>
+                    <img src={actImage} alt="Activity Preview" style={{ width: '100px', height: '75px', borderRadius: '8px', objectFit: 'cover', border: '1px solid var(--card-border)' }} />
+                    <div>
+                      <div style={{ fontSize: '0.8rem', fontWeight: '600' }}>Foto Kegiatan</div>
+                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Dokumentasi aktivitas lapangan</div>
+                      <button type="button" className="btn btn-secondary" onClick={startActCamera} style={{ padding: '4px 8px', fontSize: '0.65rem', height: 'auto', marginTop: '6px', borderRadius: '6px' }}>
+                        <RefreshCw size={10} /> Foto Ulang
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="form-group">
+                    <label>Keterangan Kegiatan *</label>
+                    <textarea 
+                      placeholder="Jelaskan kegiatan yang sedang dilakukan..."
+                      className="form-control"
+                      rows="3"
+                      value={actFormDescription}
+                      onChange={(e) => setActFormDescription(e.target.value)}
+                      style={{ resize: 'none' }}
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label>Lokasi</label>
+                    <select 
+                      className="form-control"
+                      value={actFormLocation}
+                      onChange={(e) => setActFormLocation(e.target.value)}
+                      required
+                    >
+                      <option value="" disabled>Pilih Lokasi</option>
+                      {actLocations.map((loc, idx) => (
+                        <option key={idx} value={loc}>{loc}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label>Nama Staff / Petugas</label>
+                    {currentUser.role === 'Operator' ? (
+                      <input type="text" className="form-control" value={currentUser.name} disabled />
+                    ) : (
+                      <select 
+                        className="form-control"
+                        value={actFormOfficer}
+                        onChange={(e) => setActFormOfficer(e.target.value)}
+                        required
+                      >
+                        {officers.map((name, idx) => (
+                          <option key={idx} value={name}>{name}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  <div className="form-group">
+                    <label>Catatan Tambahan (Opsional)</label>
+                    <textarea 
+                      placeholder="Catatan tambahan jika ada..."
+                      className="form-control"
+                      rows="2"
+                      value={actFormNotes}
+                      onChange={(e) => setActFormNotes(e.target.value)}
+                      style={{ resize: 'none' }}
+                    />
+                  </div>
+                </div>
+
+                <div className="upload-btn-container">
+                  <button type="button" className="btn btn-secondary" onClick={() => { setActImage(null); setActFormDescription(''); setActFormNotes(''); }}>
+                    Hapus
+                  </button>
+                  <button type="submit" className="btn btn-primary">
+                    Simpan Laporan
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        )}
+
         {/* ----------------- TAB: ATTENDANCE (Absensi) ----------------- */}
         {activeTab === 'attendance' && isTabVisible('attendance') && (
           <div>
@@ -1473,14 +1857,14 @@ export default function App() {
                 {/* Type Selection */}
                 <div className="form-group">
                   <label>Tipe Absensi</label>
-                  <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '4px' }}>
                     <button 
                       type="button" 
                       className={`btn ${attType === 'Check In' ? 'btn-primary' : 'btn-secondary'}`}
                       onClick={() => setAttType('Check In')}
                       style={attType === 'Check In' ? { background: 'linear-gradient(135deg, #10b981, #059669)', border: 'none', boxShadow: '0 4px 10px rgba(16,185,129,0.2)' } : {}}
                     >
-                      Check In (Masuk)
+                      🟢 Check In (Masuk)
                     </button>
                     <button 
                       type="button" 
@@ -1488,19 +1872,53 @@ export default function App() {
                       onClick={() => setAttType('Check Out')}
                       style={attType === 'Check Out' ? { background: 'linear-gradient(135deg, #f59e0b, #d97706)', border: 'none', boxShadow: '0 4px 10px rgba(245,158,11,0.2)' } : {}}
                     >
-                      Check Out (Keluar)
+                      🟠 Check Out (Keluar)
+                    </button>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginTop: '8px' }}>
+                    <button 
+                      type="button" 
+                      className={`btn ${attType === 'Sakit' ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => setAttType('Sakit')}
+                      style={attType === 'Sakit' ? { background: 'linear-gradient(135deg, #ef4444, #dc2626)', border: 'none', boxShadow: '0 4px 10px rgba(239,68,68,0.2)', fontSize: '0.7rem', padding: '8px 4px' } : { fontSize: '0.7rem', padding: '8px 4px' }}
+                    >
+                      🔴 Sakit
+                    </button>
+                    <button 
+                      type="button" 
+                      className={`btn ${attType === 'Izin' ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => setAttType('Izin')}
+                      style={attType === 'Izin' ? { background: 'linear-gradient(135deg, #3b82f6, #2563eb)', border: 'none', boxShadow: '0 4px 10px rgba(59,130,246,0.2)', fontSize: '0.7rem', padding: '8px 4px' } : { fontSize: '0.7rem', padding: '8px 4px' }}
+                    >
+                      🔵 Izin
+                    </button>
+                    <button 
+                      type="button" 
+                      className={`btn ${attType === 'Cuti' ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => setAttType('Cuti')}
+                      style={attType === 'Cuti' ? { background: 'linear-gradient(135deg, #06b6d4, #0891b2)', border: 'none', boxShadow: '0 4px 10px rgba(6,182,212,0.2)', fontSize: '0.7rem', padding: '8px 4px' } : { fontSize: '0.7rem', padding: '8px 4px' }}
+                    >
+                      🟡 Cuti
                     </button>
                   </div>
                 </div>
 
                 {/* Selfie Camera Capture */}
                 <div className="form-group">
-                  <label>Foto Wajah Petugas (Selfie)</label>
+                  <label>
+                    {['Check In', 'Check Out'].includes(attType) 
+                      ? 'Foto Wajah Petugas (Selfie) *' 
+                      : 'Foto Surat Keterangan / Bukti Eviden *'}
+                  </label>
                   
                   {!attCameraActive && !attImage && (
                     <div style={{ border: '2px dashed var(--card-border)', borderRadius: '12px', padding: '24px', textAlign: 'center', background: 'rgba(255,255,255,0.01)' }}>
                       <User size={36} style={{ color: 'var(--text-muted)', marginBottom: '8px' }} />
-                      <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '14px' }}>Ambil foto selfie stasiun kerja saat Check In / Out.</p>
+                      <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '14px' }}>
+                        {['Check In', 'Check Out'].includes(attType)
+                          ? 'Ambil foto selfie di lokasi stasiun kerja saat Check In / Out.'
+                          : 'Ambil atau unggah foto surat keterangan dokter/bukti izin.'}
+                      </p>
                       <div style={{ display: 'flex', gap: '8px' }}>
                         <button type="button" className="btn btn-secondary" onClick={startAttCamera} style={{ fontSize: '0.75rem', padding: '8px 12px' }}>
                           <Camera size={14} /> Buka Kamera Depan
@@ -1583,6 +2001,39 @@ export default function App() {
                                 <span>Terdeteksi kemungkinan manipulasi Fake GPS (Lokasi Tiruan)!</span>
                               </div>
                             )}
+
+                            {/* Geofence Distance Indicator */}
+                            {(() => {
+                              if (settings.enableGeofence && ['Check In', 'Check Out'].includes(attType)) {
+                                const dist = calculateDistance(
+                                  attGpsData.latitude,
+                                  attGpsData.longitude,
+                                  settings.geofenceLat,
+                                  settings.geofenceLon
+                                );
+                                if (dist !== null) {
+                                  const isWithin = dist <= settings.geofenceRadius;
+                                  return (
+                                    <div style={{ 
+                                      marginTop: '8px', 
+                                      padding: '8px 12px', 
+                                      borderRadius: '8px', 
+                                      background: isWithin ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', 
+                                      border: isWithin ? '1px solid rgba(16,185,129,0.2)' : '1px solid rgba(239,68,68,0.2)', 
+                                      fontSize: '0.75rem' 
+                                    }}>
+                                      <div style={{ fontWeight: 'bold', color: isWithin ? '#10b981' : '#ef4444' }}>
+                                        {isWithin ? '🟢 Anda berada di dalam area absensi' : '🔴 Anda berada di luar area absensi'}
+                                      </div>
+                                      <div style={{ color: 'var(--text-secondary)', marginTop: '2px' }}>
+                                        Jarak ke kantor: <strong>{dist.toFixed(1)} meter</strong> (Batas Maksimal: {settings.geofenceRadius} meter)
+                                      </div>
+                                    </div>
+                                  );
+                                }
+                              }
+                              return null;
+                            })()}
                           </div>
                         ) : (
                           <div style={{ fontSize: '0.75rem', color: 'var(--danger)', fontWeight: '500', marginTop: '4px' }}>
@@ -1594,14 +2045,58 @@ export default function App() {
                   </div>
                 )}
 
-                <button 
-                  type="submit" 
-                  className="btn btn-primary" 
-                  style={{ width: '100%', marginTop: '16px', background: 'linear-gradient(135deg, #10b981, #059669)', border: 'none' }}
-                  disabled={!attImage || attGpsLoading}
-                >
-                  Kirim Absensi {attType}
-                </button>
+                {/* Notes/Keterangan Field for Sakit/Izin/Cuti */}
+                {!['Check In', 'Check Out'].includes(attType) && (
+                  <div className="form-group" style={{ marginTop: '12px' }}>
+                    <label>Keterangan / Alasan *</label>
+                    <textarea 
+                      placeholder="Tuliskan keterangan detail alasan sakit, izin, atau cuti..."
+                      className="form-control"
+                      rows="3"
+                      value={attNotes}
+                      onChange={(e) => setAttNotes(e.target.value)}
+                      style={{ resize: 'none' }}
+                      required
+                    />
+                  </div>
+                )}
+
+                {(() => {
+                  const isGeofenceBlocked = 
+                    settings.enableGeofence && 
+                    ['Check In', 'Check Out'].includes(attType) && 
+                    attGpsData && 
+                    attGpsData.latitude && 
+                    calculateDistance(
+                      attGpsData.latitude,
+                      attGpsData.longitude,
+                      settings.geofenceLat,
+                      settings.geofenceLon
+                    ) > settings.geofenceRadius;
+
+                  return (
+                    <button 
+                      type="submit" 
+                      className="btn btn-primary" 
+                      style={{ 
+                        width: '100%', 
+                        marginTop: '16px', 
+                        background: isGeofenceBlocked 
+                          ? 'var(--bg-tertiary)' 
+                          : attType === 'Check In' ? 'linear-gradient(135deg, #10b981, #059669)'
+                          : attType === 'Check Out' ? 'linear-gradient(135deg, #f59e0b, #d97706)'
+                          : attType === 'Sakit' ? 'linear-gradient(135deg, #ef4444, #dc2626)'
+                          : attType === 'Izin' ? 'linear-gradient(135deg, #3b82f6, #2563eb)'
+                          : 'linear-gradient(135deg, #06b6d4, #0891b2)',
+                        border: 'none',
+                        cursor: isGeofenceBlocked ? 'not-allowed' : 'pointer'
+                      }}
+                      disabled={!attImage || attGpsLoading || isGeofenceBlocked}
+                    >
+                      {isGeofenceBlocked ? '⚠️ Di Luar Radius Absensi' : `Kirim Absensi ${attType}`}
+                    </button>
+                  );
+                })()}
               </form>
             </div>
           </div>
@@ -1612,26 +2107,49 @@ export default function App() {
           <div>
             {/* Top Sub-Nav Tabs */}
             <div style={{ display: 'flex', background: 'var(--bg-secondary)', borderRadius: '12px', padding: '4px', marginBottom: '14px', border: '1px solid var(--card-border)' }}>
-              <button 
-                className={`btn`} 
-                style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.75rem', background: historySubTab === 'suhu' ? 'var(--bg-tertiary)' : 'transparent', color: historySubTab === 'suhu' ? '#fff' : 'var(--text-muted)' }}
-                onClick={() => setHistorySubTab('suhu')}
-              >
-                <Activity size={14} style={{ marginRight: '4px', display: 'inline' }} />
-                Suhu Alat ({filteredReports.length})
-              </button>
-              <button 
-                className={`btn`} 
-                style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.75rem', background: historySubTab === 'absensi' ? 'var(--bg-tertiary)' : 'transparent', color: historySubTab === 'absensi' ? '#fff' : 'var(--text-muted)' }}
-                onClick={() => setHistorySubTab('absensi')}
-              >
-                <UserCheck size={14} style={{ marginRight: '4px', display: 'inline' }} />
-                Absensi Petugas ({filteredAttendance.length})
-              </button>
+              {(currentUser.jobdesk || 'suhu') === 'suhu' ? (
+                <>
+                  <button 
+                    className={`btn`} 
+                    style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.75rem', background: historySubTab === 'suhu' ? 'var(--bg-tertiary)' : 'transparent', color: historySubTab === 'suhu' ? '#fff' : 'var(--text-muted)' }}
+                    onClick={() => setHistorySubTab('suhu')}
+                  >
+                    <Activity size={14} style={{ marginRight: '4px', display: 'inline' }} />
+                    Suhu Alat ({filteredReports.length})
+                  </button>
+                  <button 
+                    className={`btn`} 
+                    style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.75rem', background: historySubTab === 'absensi' ? 'var(--bg-tertiary)' : 'transparent', color: historySubTab === 'absensi' ? '#fff' : 'var(--text-muted)' }}
+                    onClick={() => setHistorySubTab('absensi')}
+                  >
+                    <UserCheck size={14} style={{ marginRight: '4px', display: 'inline' }} />
+                    Absensi Petugas ({filteredAttendance.length})
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button 
+                    className={`btn`} 
+                    style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.75rem', background: historyActSubTab === 'kegiatan' ? 'var(--bg-tertiary)' : 'transparent', color: historyActSubTab === 'kegiatan' ? '#fff' : 'var(--text-muted)' }}
+                    onClick={() => setHistoryActSubTab('kegiatan')}
+                  >
+                    <ClipboardList size={14} style={{ marginRight: '4px', display: 'inline' }} />
+                    Kegiatan ({filteredActivities.length})
+                  </button>
+                  <button 
+                    className={`btn`} 
+                    style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.75rem', background: historyActSubTab === 'absensi' ? 'var(--bg-tertiary)' : 'transparent', color: historyActSubTab === 'absensi' ? '#fff' : 'var(--text-muted)' }}
+                    onClick={() => setHistoryActSubTab('absensi')}
+                  >
+                    <UserCheck size={14} style={{ marginRight: '4px', display: 'inline' }} />
+                    Absensi Petugas ({filteredAttendance.length})
+                  </button>
+                </>
+              )}
             </div>
 
             {/* Sub-Tab 1: Suhu Alat */}
-            {historySubTab === 'suhu' && (
+            {(currentUser.jobdesk || 'suhu') === 'suhu' && historySubTab === 'suhu' && (
               <div>
                 <div className="glass-card" style={{ padding: '14px' }}>
                   <div className="form-group" style={{ marginBottom: '10px' }}>
@@ -1733,8 +2251,88 @@ export default function App() {
               </div>
             )}
 
-            {/* Sub-Tab 2: Absensi Petugas */}
-            {historySubTab === 'absensi' && (
+            {/* Sub-Tab 2: Kegiatan (Inspeksi / Analis) */}
+            {(currentUser.jobdesk || 'suhu') !== 'suhu' && historyActSubTab === 'kegiatan' && (
+              <div>
+                <div className="glass-card" style={{ padding: '14px' }}>
+                  <div className="form-group" style={{ marginBottom: '10px' }}>
+                    <input 
+                      type="text" 
+                      placeholder="Cari kegiatan, lokasi, petugas..."
+                      className="form-control"
+                      style={{ padding: '8px 12px', fontSize: '0.8rem' }}
+                      value={searchActQuery}
+                      onChange={(e) => setSearchActQuery(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>LOKASI</label>
+                    <select 
+                      className="form-control"
+                      style={{ padding: '6px 8px', fontSize: '0.75rem', marginTop: '3px' }}
+                      value={filterActLocation}
+                      onChange={(e) => setFilterActLocation(e.target.value)}
+                    >
+                      <option value="Semua">Semua Lokasi</option>
+                      {actLocations.map((loc, idx) => (
+                        <option key={idx} value={loc}>{loc}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex-row-between" style={{ marginBottom: '12px' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 'bold' }}>
+                    Ditemukan {filteredActivities.length} Kegiatan
+                  </span>
+                  <button className="btn btn-secondary" onClick={() => db.exportActivitiesToCSV(filteredActivities)} style={{ padding: '6px 12px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px' }}>
+                    <Download size={14} /> Ekspor CSV
+                  </button>
+                </div>
+
+                {filteredActivities.length === 0 ? (
+                  <div className="glass-card empty-state">
+                    <ClipboardList size={32} />
+                    <p>Tidak ada data kegiatan ditemukan.</p>
+                  </div>
+                ) : (
+                  <div className="history-list">
+                    {filteredActivities.map((a) => {
+                      const formattedDate = new Date(a.timestamp).toLocaleString('id-ID', {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      });
+                      return (
+                        <div key={a.id} className="glass-card report-item" style={{ padding: '12px', cursor: 'pointer' }} onClick={() => setSelectedActivity(a)}>
+                          {a.image ? (
+                            <img src={a.image} alt="Activity capture" className="report-thumb" />
+                          ) : (
+                            <div className="report-thumb" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-tertiary)' }}>
+                              <ImageIcon size={20} style={{ color: 'var(--text-muted)' }} />
+                            </div>
+                          )}
+                          <div className="report-info" style={{ flex: 1 }}>
+                            <h4>{a.location}</h4>
+                            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px', lineClamp: 2, WebkitLineClamp: 2, display: '-webkit-box', WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{a.description}</p>
+                            <div className="report-meta" style={{ marginTop: '4px' }}>
+                              <User size={10} /> <span>{a.officer || 'Petugas'}</span>
+                              <span>•</span>
+                              <Calendar size={10} /> <span>{formattedDate}</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Sub-Tab 3: Absensi Petugas */}
+            {(((currentUser.jobdesk || 'suhu') === 'suhu' && historySubTab === 'absensi') || 
+              ((currentUser.jobdesk || 'suhu') !== 'suhu' && historyActSubTab === 'absensi')) && (
               <div>
                 <div className="glass-card" style={{ padding: '14px' }}>
                   <div className="form-group" style={{ marginBottom: '10px' }}>
@@ -1773,6 +2371,9 @@ export default function App() {
                         <option value="Semua">Semua Tipe</option>
                         <option value="Check In">Check In</option>
                         <option value="Check Out">Check Out</option>
+                        <option value="Sakit">Sakit</option>
+                        <option value="Izin">Izin</option>
+                        <option value="Cuti">Cuti</option>
                       </select>
                     </div>
                   </div>
@@ -1819,9 +2420,21 @@ export default function App() {
                           </div>
                           <div className="report-value-area">
                             <span className="status-badge" style={{ 
-                              background: isCheckIn ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-                              color: isCheckIn ? '#10b981' : '#f59e0b',
-                              border: isCheckIn ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(245, 158, 11, 0.3)'
+                              background: a.type === 'Check In' ? 'rgba(16, 185, 129, 0.15)' 
+                                        : a.type === 'Check Out' ? 'rgba(245, 158, 11, 0.15)'
+                                        : a.type === 'Sakit' ? 'rgba(239, 68, 68, 0.15)'
+                                        : a.type === 'Izin' ? 'rgba(59, 130, 246, 0.15)'
+                                        : 'rgba(6, 182, 212, 0.15)',
+                              color: a.type === 'Check In' ? '#10b981'
+                                   : a.type === 'Check Out' ? '#f59e0b'
+                                   : a.type === 'Sakit' ? '#ef4444'
+                                   : a.type === 'Izin' ? '#3b82f6'
+                                   : '#06b6d4',
+                              border: a.type === 'Check In' ? '1px solid rgba(16, 185, 129, 0.3)'
+                                    : a.type === 'Check Out' ? '1px solid rgba(245, 158, 11, 0.3)'
+                                    : a.type === 'Sakit' ? '1px solid rgba(239, 68, 68, 0.3)'
+                                    : a.type === 'Izin' ? '1px solid rgba(59, 130, 246, 0.3)'
+                                    : '1px solid rgba(6, 182, 212, 0.3)'
                             }}>
                               {a.type}
                             </span>
@@ -1924,18 +2537,149 @@ export default function App() {
               </button>
             </form>
 
+            {/* Geofencing Settings */}
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              db.saveSettings(settings);
+              showToast("Pengaturan Geofencing absensi disimpan!", "success");
+            }} className="glass-card">
+              <h3 className="section-title">
+                <MapPin size={16} style={{ color: 'var(--primary)' }} />
+                Konfigurasi Geofencing Kantor
+              </h3>
+              
+              <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                <input 
+                  type="checkbox" 
+                  id="enableGeofence"
+                  checked={settings.enableGeofence || false}
+                  onChange={(e) => setSettings({ ...settings, enableGeofence: e.target.checked })}
+                  style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                />
+                <label htmlFor="enableGeofence" style={{ marginBottom: 0, cursor: 'pointer', fontWeight: 'bold' }}>
+                  Aktifkan Batas Lokasi (Geofencing)
+                </label>
+              </div>
+
+              {settings.enableGeofence && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div className="form-group">
+                      <label>Latitude Kantor</label>
+                      <input 
+                        type="number" 
+                        step="0.000001" 
+                        placeholder="-6.200000"
+                        className="form-control"
+                        value={settings.geofenceLat !== undefined ? settings.geofenceLat : ''}
+                        onChange={(e) => setSettings({ ...settings, geofenceLat: parseFloat(e.target.value) })}
+                        required
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Longitude Kantor</label>
+                      <input 
+                        type="number" 
+                        step="0.000001" 
+                        placeholder="106.816666"
+                        className="form-control"
+                        value={settings.geofenceLon !== undefined ? settings.geofenceLon : ''}
+                        onChange={(e) => setSettings({ ...settings, geofenceLon: parseFloat(e.target.value) })}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="form-group">
+                    <button 
+                      type="button" 
+                      className="btn btn-secondary" 
+                      onClick={() => {
+                        if (!navigator.geolocation) {
+                          showToast("Geolocation tidak didukung browser ini.", "error");
+                          return;
+                        }
+                        navigator.geolocation.getCurrentPosition(
+                          (position) => {
+                            setSettings({
+                              ...settings,
+                              geofenceLat: parseFloat(position.coords.latitude.toFixed(6)),
+                              geofenceLon: parseFloat(position.coords.longitude.toFixed(6))
+                            });
+                            showToast("Koordinat lokasi admin saat ini berhasil diisi.", "success");
+                          },
+                          (err) => {
+                            showToast("Gagal mengambil lokasi admin: " + err.message, "error");
+                          }
+                        );
+                      }}
+                      style={{ fontSize: '0.75rem', padding: '6px 12px', width: '100%', marginBottom: '8px' }}
+                    >
+                      📍 Gunakan Koordinat Perangkat Ini
+                    </button>
+                  </div>
+
+                  <div className="form-group">
+                    <label>Radius Batas Toleransi (Meter)</label>
+                    <div className="temp-input-wrapper">
+                      <input 
+                        type="number" 
+                        placeholder="100" 
+                        className="form-control"
+                        value={settings.geofenceRadius !== undefined ? settings.geofenceRadius : ''}
+                        onChange={(e) => setSettings({ ...settings, geofenceRadius: parseInt(e.target.value, 10) })}
+                        required
+                      />
+                      <span className="temp-unit">meter</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '8px' }}>
+                Simpan Konfigurasi Geofencing
+              </button>
+            </form>
+
             {/* Manage Locations */}
             <div className="glass-card">
               <div className="flex-row-between" style={{ marginBottom: '10px' }}>
                 <h3 className="section-title" style={{ marginBottom: 0 }}>
                   <MapPin size={16} style={{ color: 'var(--primary)' }} />
-                  Kelola Stasiun/Lokasi Alat
+                  Kelola Stasiun/Lokasi
                 </h3>
                 {!showLocationInput && (
                   <button className="btn btn-secondary" onClick={() => setShowLocationInput(true)} style={{ padding: '4px 10px', height: 'auto', fontSize: '0.7rem', borderRadius: '6px' }}>
                     <Plus size={12} /> Tambah
                   </button>
                 )}
+              </div>
+
+              {/* Selector for which jobdesk to manage */}
+              <div className="form-group" style={{ marginBottom: '14px' }}>
+                <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>PILIH JOBDESK UNTUK DIKELOLA</label>
+                <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                  {['suhu', 'inspeksi', 'analis'].map(jd => (
+                    <button
+                      key={jd}
+                      type="button"
+                      className="btn"
+                      onClick={() => setSettingManageJobdesk(jd)}
+                      style={{
+                        flex: 1,
+                        padding: '6px 8px',
+                        fontSize: '0.7rem',
+                        borderRadius: '6px',
+                        background: settingManageJobdesk === jd ? 'var(--primary)' : 'var(--bg-tertiary)',
+                        color: settingManageJobdesk === jd ? '#fff' : 'var(--text-muted)',
+                        border: 'none',
+                        transition: 'all 0.2s ease'
+                      }}
+                    >
+                      {jd.charAt(0).toUpperCase() + jd.slice(1)}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               {showLocationInput && (
@@ -1959,7 +2703,7 @@ export default function App() {
               )}
 
               <div className="tag-list">
-                {locations.map((loc, idx) => (
+                {settingLocations.map((loc, idx) => (
                   <div key={idx} className="tag-item">
                     <span>{loc}</span>
                     <button className="tag-remove" onClick={() => handleDeleteLocation(loc)}>×</button>
@@ -2023,7 +2767,7 @@ export default function App() {
                 <textarea
                   readOnly
                   className="form-control"
-                  style={{ fontFamily: 'monospace', fontSize: '0.55rem', height: '110px', resize: 'none', background: '#0e1117', color: '#10b981', border: '1px solid #1f2937' }}
+                  style={{ fontFamily: 'monospace', fontSize: '0.55rem', height: '150px', resize: 'none', background: '#0e1117', color: '#10b981', border: '1px solid #1f2937' }}
                   value={`-- 1. Buat tabel reports
 CREATE TABLE IF NOT EXISTS reports (
     id TEXT PRIMARY KEY,
@@ -2048,9 +2792,22 @@ CREATE TABLE IF NOT EXISTS attendance (
     is_fake_gps BOOLEAN
 );
 
--- 3. Nonaktifkan RLS (agar mudah diakses frontend)
+-- 3. Buat tabel activities
+CREATE TABLE IF NOT EXISTS activities (
+    id TEXT PRIMARY KEY,
+    timestamp TIMESTAMPTZ,
+    jobdesk TEXT,
+    officer TEXT,
+    location TEXT,
+    description TEXT,
+    notes TEXT,
+    image TEXT
+);
+
+-- 4. Nonaktifkan RLS (agar mudah diakses frontend)
 ALTER TABLE reports DISABLE ROW LEVEL SECURITY;
-ALTER TABLE attendance DISABLE ROW LEVEL SECURITY;`}
+ALTER TABLE attendance DISABLE ROW LEVEL SECURITY;
+ALTER TABLE activities DISABLE ROW LEVEL SECURITY;`}
                 />
               </div>
             </div>
@@ -2196,9 +2953,21 @@ ALTER TABLE attendance DISABLE ROW LEVEL SECURITY;`}
                   <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '4px' }}>TIPE ABSEN</span>
                   <div>
                     <span className="status-badge" style={{ 
-                      background: selectedAttendance.type === 'Check In' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-                      color: selectedAttendance.type === 'Check In' ? '#10b981' : '#f59e0b',
-                      border: selectedAttendance.type === 'Check In' ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(245, 158, 11, 0.3)'
+                      background: selectedAttendance.type === 'Check In' ? 'rgba(16, 185, 129, 0.15)' 
+                                : selectedAttendance.type === 'Check Out' ? 'rgba(245, 158, 11, 0.15)'
+                                : selectedAttendance.type === 'Sakit' ? 'rgba(239, 68, 68, 0.15)'
+                                : selectedAttendance.type === 'Izin' ? 'rgba(59, 130, 246, 0.15)'
+                                : 'rgba(6, 182, 212, 0.15)',
+                      color: selectedAttendance.type === 'Check In' ? '#10b981'
+                           : selectedAttendance.type === 'Check Out' ? '#f59e0b'
+                           : selectedAttendance.type === 'Sakit' ? '#ef4444'
+                           : selectedAttendance.type === 'Izin' ? '#3b82f6'
+                           : '#06b6d4',
+                      border: selectedAttendance.type === 'Check In' ? '1px solid rgba(16, 185, 129, 0.3)'
+                            : selectedAttendance.type === 'Check Out' ? '1px solid rgba(245, 158, 11, 0.3)'
+                            : selectedAttendance.type === 'Sakit' ? '1px solid rgba(239, 68, 68, 0.3)'
+                            : selectedAttendance.type === 'Izin' ? '1px solid rgba(59, 130, 246, 0.3)'
+                            : '1px solid rgba(6, 182, 212, 0.3)'
                     }}>
                       {selectedAttendance.type}
                     </span>
@@ -2258,6 +3027,18 @@ ALTER TABLE attendance DISABLE ROW LEVEL SECURITY;`}
                     )}
                   </div>
                 </div>
+
+                {selectedAttendance.notes && (
+                  <div style={{ display: 'flex', gap: '8px', borderTop: '1px solid var(--card-border)', paddingTop: '10px' }}>
+                    <FileText size={16} style={{ color: 'var(--primary)', flex: 'none', marginTop: '2px' }} />
+                    <div>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', display: 'block' }}>KETERANGAN / ALASAN</span>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>
+                        {selectedAttendance.notes}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {currentUser.role !== 'Operator' && (
@@ -2273,35 +3054,42 @@ ALTER TABLE attendance DISABLE ROW LEVEL SECURITY;`}
       {/* Bottom Navigation (Conditional Items based on Role) */}
       <nav className="bottom-nav">
         {isTabVisible('dashboard') && (
-          <div className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => { setActiveTab('dashboard'); stopCamera(); stopAttCamera(); }}>
+          <div className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => { setActiveTab('dashboard'); stopCamera(); stopAttCamera(); stopActCamera(); }}>
             <Activity />
             <span>Dashboard</span>
           </div>
         )}
         
         {isTabVisible('scan') && (
-          <div className={`nav-item ${activeTab === 'scan' ? 'active' : ''}`} onClick={() => { setActiveTab('scan'); startCamera(); stopAttCamera(); }}>
+          <div className={`nav-item ${activeTab === 'scan' ? 'active' : ''}`} onClick={() => { setActiveTab('scan'); startCamera(); stopAttCamera(); stopActCamera(); }}>
             <Camera />
             <span>Pindai Suhu</span>
           </div>
         )}
 
+        {isTabVisible('activity') && (
+          <div className={`nav-item ${activeTab === 'activity' ? 'active' : ''}`} onClick={() => { setActiveTab('activity'); startActCamera(); stopCamera(); stopAttCamera(); }}>
+            <ClipboardList />
+            <span>Kegiatan</span>
+          </div>
+        )}
+
         {isTabVisible('attendance') && (
-          <div className={`nav-item ${activeTab === 'attendance' ? 'active' : ''}`} onClick={() => { setActiveTab('attendance'); startAttCamera(); stopCamera(); }}>
+          <div className={`nav-item ${activeTab === 'attendance' ? 'active' : ''}`} onClick={() => { setActiveTab('attendance'); startAttCamera(); stopCamera(); stopActCamera(); }}>
             <UserCheck />
             <span>Absensi</span>
           </div>
         )}
         
         {isTabVisible('history') && (
-          <div className={`nav-item ${activeTab === 'history' ? 'active' : ''}`} onClick={() => { setActiveTab('history'); stopCamera(); stopAttCamera(); }}>
+          <div className={`nav-item ${activeTab === 'history' ? 'active' : ''}`} onClick={() => { setActiveTab('history'); stopCamera(); stopAttCamera(); stopActCamera(); }}>
             <Calendar />
             <span>Riwayat</span>
           </div>
         )}
         
         {isTabVisible('settings') && (
-          <div className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => { setActiveTab('settings'); stopCamera(); stopAttCamera(); }}>
+          <div className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`} onClick={() => { setActiveTab('settings'); stopCamera(); stopAttCamera(); stopActCamera(); }}>
             <SettingsIcon />
             <span>Pengaturan</span>
           </div>
@@ -2310,6 +3098,92 @@ ALTER TABLE attendance DISABLE ROW LEVEL SECURITY;`}
       {/* Hidden Canvas elements for image capturing */}
       <canvas ref={canvasRef} style={{ display: 'none' }} />
       <canvas ref={attCanvasRef} style={{ display: 'none' }} />
+      <canvas ref={actCanvasRef} style={{ display: 'none' }} />
+
+      {/* ----------------- ACTIVITY DETAIL MODAL ----------------- */}
+      {selectedActivity && (
+        <div className="modal-overlay" onClick={() => setSelectedActivity(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: '700' }}>Detail Kegiatan</h3>
+                <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>ID: {selectedActivity.id}</span>
+              </div>
+              <button className="modal-close" onClick={() => setSelectedActivity(null)}>
+                <X size={16} />
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {selectedActivity.image ? (
+                <div style={{ width: '100%', background: '#000', borderRadius: '14px', overflow: 'hidden', border: '1px solid var(--card-border)' }}>
+                  <img src={selectedActivity.image} alt="Activity detail" style={{ width: '100%', maxHeight: '200px', objectFit: 'contain', display: 'block' }} />
+                </div>
+              ) : (
+                <div style={{ width: '100%', height: '140px', background: 'var(--bg-tertiary)', borderRadius: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--card-border)', color: 'var(--text-muted)' }}>
+                  <ImageIcon size={32} />
+                  <span style={{ fontSize: '0.75rem', marginTop: '6px' }}>Tidak ada foto terlampir</span>
+                </div>
+              )}
+
+              <div className="glass-card" style={{ padding: '16px', marginBottom: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <MapPin size={16} style={{ color: 'var(--primary)', flex: 'none', marginTop: '2px' }} />
+                  <div>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', display: 'block' }}>LOKASI</span>
+                    <span style={{ fontSize: '0.85rem', fontWeight: '600' }}>{selectedActivity.location}</span>
+                  </div>
+                </div>
+                
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <User size={16} style={{ color: 'var(--primary)', flex: 'none', marginTop: '2px' }} />
+                  <div>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', display: 'block' }}>PETUGAS</span>
+                    <span style={{ fontSize: '0.85rem', fontWeight: '600' }}>{selectedActivity.officer || 'Anonim'}</span>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <Calendar size={16} style={{ color: 'var(--primary)', flex: 'none', marginTop: '2px' }} />
+                  <div>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', display: 'block' }}>WAKTU</span>
+                    <span style={{ fontSize: '0.85rem', fontWeight: '600' }}>
+                      {new Date(selectedActivity.timestamp).toLocaleString('id-ID', {
+                        dateStyle: 'long',
+                        timeStyle: 'medium'
+                      })}
+                    </span>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <FileText size={16} style={{ color: 'var(--primary)', flex: 'none', marginTop: '2px' }} />
+                  <div>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', display: 'block' }}>KETERANGAN</span>
+                    <span style={{ fontSize: '0.85rem' }}>{selectedActivity.description}</span>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <Info size={16} style={{ color: 'var(--primary)', flex: 'none', marginTop: '2px' }} />
+                  <div>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', display: 'block' }}>CATATAN</span>
+                    <span style={{ fontSize: '0.85rem', color: selectedActivity.notes ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                      {selectedActivity.notes || 'Tidak ada catatan.'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {currentUser.role !== 'Operator' && (
+                <button className="btn btn-secondary" onClick={() => handleDeleteActivity(selectedActivity.id)} style={{ color: 'var(--danger)', borderColor: 'rgba(239, 68, 68, 0.2)', background: 'rgba(239, 68, 68, 0.05)', marginTop: '8px' }}>
+                  <Trash2 size={16} /> Hapus Laporan
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
