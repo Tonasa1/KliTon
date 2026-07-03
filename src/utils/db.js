@@ -25,10 +25,35 @@ const DEFAULT_USERS = [
   { username: 'supervisor', role: 'Supervisor', password: 'spv123', jobdesk: 'suhu' },
   { username: 'supervisor1', role: 'Supervisor', password: 'spv123', jobdesk: 'analis' },
   { username: 'manager1', role: 'Manager', password: 'manager123', jobdesk: 'suhu' },
+  // === SUHU ===
   { username: 'FAHRIL', role: 'Operator', password: 'operator123', jobdesk: 'suhu' },
-  { username: 'JUMAHIR', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
-  { username: 'IMAN TAQWA', role: 'Operator', password: 'operator123', jobdesk: 'analis' },
-  { username: 'ANDI MAJJAJARENG', role: 'Operator', password: 'operator123', jobdesk: 'suhu' }
+  { username: 'JUMAHIR', role: 'Operator', password: 'operator123', jobdesk: 'suhu' },
+  { username: 'IMAN TAQWA', role: 'Operator', password: 'operator123', jobdesk: 'suhu' },
+  { username: 'ANDI MAJJAJARENG', role: 'Operator', password: 'operator123', jobdesk: 'suhu' },
+  // === ANALIS ===
+  { username: 'MARINDRA BONE', role: 'Operator', password: 'operator123', jobdesk: 'analis' },
+  { username: 'MUHAMMAD RUSTAM', role: 'Operator', password: 'operator123', jobdesk: 'analis' },
+  { username: 'M.RIDHO ASSARIY', role: 'Operator', password: 'operator123', jobdesk: 'analis' },
+  { username: 'ARI', role: 'Operator', password: 'operator123', jobdesk: 'analis' },
+  { username: 'MUTMAINNAH', role: 'Operator', password: 'operator123', jobdesk: 'analis' },
+  { username: 'NUR FADILLAH', role: 'Operator', password: 'operator123', jobdesk: 'analis' },
+  // === INSPEKSI ===
+  { username: 'MUHAMMAD FADHIL', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
+  { username: 'RIZAL BAKRI', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
+  { username: 'NUR MUHAMMAD SADMAN', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
+  { username: 'MUHAMMAD AKSAN RIJAL', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
+  { username: 'IRFAN. H', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
+  { username: 'DZAKY FAHMI PAHLEVI', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
+  { username: 'BAYU PURNAMA', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
+  { username: 'ALIF ALAMSYAH', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
+  { username: 'SAENAL RIPALDI', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
+  { username: 'RIVALDO', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
+  { username: 'AMIRULLAH', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
+  { username: 'IRWANDI', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
+  { username: 'MUHAMMAD FIRMANSYAH SY', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
+  { username: 'SULAEMAN', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
+  { username: 'STEVIANUS TANDIONG', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
+  { username: 'ALFIANUS METOLY', role: 'Operator', password: 'operator123', jobdesk: 'inspeksi' },
 ];
 
 const DEFAULT_LOCATIONS = [
