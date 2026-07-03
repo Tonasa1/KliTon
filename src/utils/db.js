@@ -108,6 +108,7 @@ export const db = {
       };
       reports.push(newReport);
       localStorage.setItem(REPORTS_KEY, JSON.stringify(reports));
+      this.uploadReportToCloud(newReport); // Upload to Supabase in background
       return newReport;
     } catch (e) {
       console.error('Failed to save report:', e);
@@ -158,6 +159,7 @@ export const db = {
       };
       list.push(newEntry);
       localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(list));
+      this.uploadAttendanceToCloud(newEntry); // Upload to Supabase in background
       return newEntry;
     } catch (e) {
       console.error('Failed to save attendance:', e);
@@ -359,6 +361,148 @@ export const db = {
 
     this.downloadFile(csvContent, 'Laporan_Absensi_ThermaScan');
     return true;
+  },
+
+  // --- CLOUD SYNC CONFIG (SUPABASE) ---
+  getSupabaseConfig() {
+    return {
+      url: localStorage.getItem('thermascan_supabase_url') || '',
+      key: localStorage.getItem('thermascan_supabase_key') || ''
+    };
+  },
+
+  saveSupabaseConfig(url, key) {
+    localStorage.setItem('thermascan_supabase_url', url.trim());
+    localStorage.setItem('thermascan_supabase_key', key.trim());
+    return true;
+  },
+
+  async testSupabaseConnection(url, key) {
+    try {
+      const headers = {
+        'apikey': key,
+        'Authorization': `Bearer ${key}`
+      };
+      const res = await fetch(`${url}/rest/v1/reports?select=id&limit=1`, { headers });
+      return res.ok;
+    } catch (e) {
+      console.error('Connection test failed:', e);
+      return false;
+    }
+  },
+
+  async syncWithCloud() {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return null;
+
+    try {
+      const headers = {
+        'apikey': key,
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=representation'
+      };
+
+      // 1. Fetch from Supabase
+      const reportsRes = await fetch(`${url}/rest/v1/reports?select=*`, { headers });
+      const cloudReports = reportsRes.ok ? await reportsRes.json() : [];
+
+      const attRes = await fetch(`${url}/rest/v1/attendance?select=*`, { headers });
+      const cloudAtt = attRes.ok ? await attRes.json() : [];
+
+      // 2. Merge Reports
+      const localReports = this.getReports();
+      const mergedReportsMap = new Map();
+      
+      // Load cloud first
+      cloudReports.forEach(r => mergedReportsMap.set(r.id, r));
+      // Overwrite/Add local
+      localReports.forEach(r => mergedReportsMap.set(r.id, r));
+      
+      const mergedReports = Array.from(mergedReportsMap.values())
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        
+      localStorage.setItem(REPORTS_KEY, JSON.stringify(mergedReports));
+
+      // 3. Merge Attendance
+      const localAtt = this.getAttendance();
+      const mergedAttMap = new Map();
+      
+      cloudAtt.forEach(a => mergedAttMap.set(a.id, a));
+      localAtt.forEach(a => mergedAttMap.set(a.id, a));
+      
+      const mergedAtt = Array.from(mergedAttMap.values())
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+        
+      localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(mergedAtt));
+
+      // 4. Upload missing local reports to cloud
+      const cloudReportIds = new Set(cloudReports.map(r => r.id));
+      const reportsToUpload = localReports.filter(r => !cloudReportIds.has(r.id));
+      
+      for (const r of reportsToUpload) {
+        await fetch(`${url}/rest/v1/reports`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(r)
+        });
+      }
+
+      // 5. Upload missing local attendance to cloud
+      const cloudAttIds = new Set(cloudAtt.map(a => a.id));
+      const attToUpload = localAtt.filter(a => !cloudAttIds.has(a.id));
+      
+      for (const a of attToUpload) {
+        await fetch(`${url}/rest/v1/attendance`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(a)
+        });
+      }
+
+      return { reports: mergedReports, attendance: mergedAtt };
+    } catch (e) {
+      console.error("Sync failed:", e);
+      throw e;
+    }
+  },
+
+  async uploadReportToCloud(report) {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return;
+    try {
+      const headers = {
+        'apikey': key,
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json'
+      };
+      await fetch(`${url}/rest/v1/reports`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(report)
+      });
+    } catch (e) {
+      console.error("Failed to upload report to cloud:", e);
+    }
+  },
+
+  async uploadAttendanceToCloud(attendance) {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return;
+    try {
+      const headers = {
+        'apikey': key,
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json'
+      };
+      await fetch(`${url}/rest/v1/attendance`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(attendance)
+      });
+    } catch (e) {
+      console.error("Failed to upload attendance to cloud:", e);
+    }
   },
 
   downloadFile(content, fileNamePrefix) {
