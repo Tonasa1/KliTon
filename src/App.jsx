@@ -241,8 +241,8 @@ export default function App() {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     
-    const videoWidth = video.videoWidth;
-    const videoHeight = video.videoHeight;
+    const videoWidth = video.videoWidth || video.clientWidth || 640;
+    const videoHeight = video.videoHeight || video.clientHeight || 480;
     canvas.width = videoWidth;
     canvas.height = videoHeight;
     ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
@@ -284,6 +284,7 @@ export default function App() {
   // --- CAMERA MANAGEMENT (Absensi) ---
   const startAttCamera = async () => {
     setAttImage(null);
+    lockGeolocation(); // Auto-start locking GPS when camera starts
     try {
       setAttCameraActive(true);
       setTimeout(async () => {
@@ -315,20 +316,125 @@ export default function App() {
     setAttCameraActive(false);
   };
 
-  const captureAttPhoto = () => {
-    if (!attVideoRef.current || !attCanvasRef.current) return;
-    const video = attVideoRef.current;
+  // Watermark helper to draw Timemark information on captured or uploaded photos
+  const watermarkImage = async (imgElement, width, height) => {
     const canvas = attCanvasRef.current;
+    if (!canvas) return null;
+    
     const ctx = canvas.getContext('2d');
+    canvas.width = width;
+    canvas.height = height;
+    ctx.drawImage(imgElement, 0, 0, width, height);
     
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+    setAttGpsLoading(true);
     
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-    setAttImage(dataUrl);
-    stopAttCamera();
-    lockGeolocation();
+    // Time & Date details
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+    const dateStr = now.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const dayStr = now.toLocaleDateString('id-ID', { weekday: 'long' });
+    
+    // Reverse Geocoding Address from current GPS coordinates
+    let addressText = '';
+    const currentGps = attGpsData;
+    
+    if (currentGps && currentGps.latitude) {
+      try {
+        const controller = new AbortController();
+        const id = setTimeout(() => controller.abort(), 2000); // 2-second timeout
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${currentGps.latitude}&lon=${currentGps.longitude}&zoom=18&addressdetails=1`, {
+          signal: controller.signal,
+          headers: { 'Accept-Language': 'id', 'User-Agent': 'KliTonApp/1.0' }
+        });
+        clearTimeout(id);
+        const data = await res.json();
+        if (data && data.address) {
+          const parts = [
+            data.address.road || data.address.village || data.address.suburb || '',
+            data.address.district || data.address.city_district || '',
+            data.address.city || data.address.regency || ''
+          ].filter(Boolean);
+          addressText = parts.join(', ');
+        }
+      } catch (e) {
+        console.error("Reverse geocoding failed, falling back to coords:", e);
+      }
+    }
+    
+    if (!addressText && currentGps && currentGps.latitude) {
+      addressText = `Lat: ${parseFloat(currentGps.latitude).toFixed(6)}, Lon: ${parseFloat(currentGps.longitude).toFixed(6)} (Akurasi: ±${currentGps.accuracy}m)`;
+    } else if (!addressText) {
+      addressText = 'Lokasi GPS tidak aktif / tidak terkunci';
+    }
+    
+    // Draw Dark banner background overlay at the bottom
+    const bannerH = Math.round(height * 0.22);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.fillRect(0, height - bannerH, width, bannerH);
+    
+    // Font setup
+    ctx.fillStyle = '#ffffff';
+    ctx.textBaseline = 'top';
+    
+    // Time Text
+    ctx.font = 'bold 32px sans-serif';
+    ctx.fillText(timeStr, 20, height - bannerH + 12);
+    
+    // Date & Day Text
+    ctx.font = '13px sans-serif';
+    ctx.fillText(`|  ${dateStr}  |  ${dayStr}`, 125, height - bannerH + 24);
+    
+    // Wrapped Address/GPS coordinates
+    ctx.font = '10px sans-serif';
+    ctx.fillStyle = '#cbd5e1';
+    
+    const wrapText = (text, x, y, maxWidth, lineHeight) => {
+      const words = text.split(' ');
+      let line = '';
+      let currentY = y;
+      for (let n = 0; n < words.length; n++) {
+        let testLine = line + words[n] + ' ';
+        let metrics = ctx.measureText(testLine);
+        let testWidth = metrics.width;
+        if (testWidth > maxWidth && n > 0) {
+          ctx.fillText(line, x, currentY);
+          line = words[n] + ' ';
+          currentY += lineHeight;
+        } else {
+          line = testLine;
+        }
+      }
+      ctx.fillText(line, x, currentY);
+    };
+    
+    wrapText(addressText, 20, height - bannerH + 52, width - 40, 15);
+    
+    // Watermark tag top right
+    ctx.font = 'bold 10px sans-serif';
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.fillText('KliTon Timemark Verified', width - 150, 12);
+    
+    setAttGpsLoading(false);
+    return canvas.toDataURL('image/jpeg', 0.92);
+  };
+
+  const captureAttPhoto = async () => {
+    if (!attVideoRef.current) return;
+    const video = attVideoRef.current;
+    
+    try {
+      const vW = video.videoWidth || video.clientWidth || 640;
+      const vH = video.videoHeight || video.clientHeight || 480;
+      const base64 = await watermarkImage(video, vW, vH);
+      if (base64) {
+        setAttImage(base64);
+      }
+    } catch (e) {
+      console.error("Error capturing/watermarking photo:", e);
+      showToast("Gagal mengambil foto. Silakan coba lagi.", "error");
+    } finally {
+      stopAttCamera();
+    }
   };
 
   const handleAttFileUpload = (e) => {
@@ -337,9 +443,15 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (event) => {
       const dataUrl = event.target.result;
-      setAttImage(dataUrl);
+      const img = new Image();
+      img.onload = async () => {
+        const base64 = await watermarkImage(img, img.width, img.height);
+        if (base64) {
+          setAttImage(base64);
+        }
+      };
+      img.src = dataUrl;
       stopAttCamera();
-      lockGeolocation();
     };
     reader.readAsDataURL(file);
   };
@@ -1950,6 +2062,9 @@ export default function App() {
           </div>
         )}
       </nav>
+      {/* Hidden Canvas elements for image capturing */}
+      <canvas ref={canvasRef} style={{ display: 'none' }} />
+      <canvas ref={attCanvasRef} style={{ display: 'none' }} />
     </div>
   );
 }
