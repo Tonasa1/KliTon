@@ -96,9 +96,15 @@ const DEFAULT_SETTINGS = {
 if (!localStorage.getItem(OFFICERS_KEY)) {
   localStorage.setItem(OFFICERS_KEY, JSON.stringify(DEFAULT_OFFICERS));
 }
-if (!localStorage.getItem(USERS_KEY)) {
-  localStorage.setItem(USERS_KEY, JSON.stringify(DEFAULT_USERS));
-}
+// Always merge DEFAULT_USERS: add any new default users that don't exist yet in localStorage
+const _existingUsers = JSON.parse(localStorage.getItem(USERS_KEY) || '[]');
+const _mergedUsers = [..._existingUsers];
+DEFAULT_USERS.forEach(defUser => {
+  if (!_mergedUsers.find(u => u.username === defUser.username)) {
+    _mergedUsers.push(defUser);
+  }
+});
+localStorage.setItem(USERS_KEY, JSON.stringify(_mergedUsers));
 if (!localStorage.getItem(LOCATIONS_KEY)) {
   localStorage.setItem(LOCATIONS_KEY, JSON.stringify(DEFAULT_LOCATIONS));
 }
