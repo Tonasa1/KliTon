@@ -264,6 +264,22 @@ export const db = {
     }
   },
 
+  updateAttendance(updatedRecord) {
+    try {
+      const list = this.getAttendance();
+      const idx = list.findIndex(a => a.id === updatedRecord.id);
+      if (idx === -1) return false;
+      list[idx] = updatedRecord;
+      localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(list));
+      // Upload perubahan ke Supabase
+      this.uploadAttendanceToCloud(updatedRecord);
+      return true;
+    } catch (e) {
+      console.error('Failed to update attendance:', e);
+      return false;
+    }
+  },
+
   clearAllAttendance() {
     try {
       localStorage.setItem(ATTENDANCE_KEY, JSON.stringify([]));
