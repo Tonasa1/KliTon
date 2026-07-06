@@ -933,21 +933,24 @@ export const db = {
         // Table might not exist yet
       }
 
-      // 10. Merge Users
+      // 10. Merge Users — cloud diambil dulu, lalu LOCAL menimpa (agar koreksi jobdesk dari kode tetap berlaku)
       const localUsers = this.getUsers();
       let mergedUsers = localUsers;
       
       if (cloudUsers.length > 0) {
         const mergedUserMap = new Map();
-        localUsers.forEach(u => mergedUserMap.set(u.username.toLowerCase(), u));
+        // Cloud dimasukkan dulu
         cloudUsers.forEach(u => mergedUserMap.set(u.username.toLowerCase(), {
           username: u.username,
           role: u.role,
           password: u.password,
           jobdesk: u.jobdesk || 'suhu'
         }));
+        // LOCAL menimpa cloud — agar DEFAULT_USERS yang sudah dikoreksi selalu menang
+        localUsers.forEach(u => mergedUserMap.set(u.username.toLowerCase(), u));
         mergedUsers = Array.from(mergedUserMap.values());
         localStorage.setItem(USERS_KEY, JSON.stringify(mergedUsers));
+
       }
 
       // 11. Upload missing local users to cloud
