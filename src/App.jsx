@@ -24,7 +24,8 @@ import {
   LogOut,
   Lock,
   ClipboardList,
-  FlaskConical
+  FlaskConical,
+  CheckSquare
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { db } from './utils/db';
@@ -178,6 +179,9 @@ export default function App() {
   const [resetUsername, setResetUsername] = useState('');
   const [resetNewPassword, setResetNewPassword] = useState('');
 
+  // Approval tab states
+  const [approvalFilter, setApprovalFilter] = useState('Semua'); // 'Semua' | 'Pending SPV' | 'Pending Manager'
+
   // Refs
   const videoRef = useRef(null);
   const attVideoRef = useRef(null);
@@ -291,9 +295,15 @@ export default function App() {
   // Load locations based on jobdesk
   useEffect(() => {
     if (currentUser) {
-      if (currentUser.jobdesk === 'inspeksi' || currentUser.jobdesk === 'analis') {
-        setActLocations(db.getLocationsByJobdesk(currentUser.jobdesk));
-        const locs = db.getLocationsByJobdesk(currentUser.jobdesk);
+      const jd = currentUser.jobdesk || 'suhu';
+      if (jd === 'inspeksi' || jd === 'analis') {
+        setActLocations(db.getLocationsByJobdesk(jd));
+        const locs = db.getLocationsByJobdesk(jd);
+        if (locs.length > 0) setActFormLocation(locs[0]);
+      } else {
+        // Operator suhu: gunakan lokasi suhu untuk kegiatan
+        const locs = db.getLocationsByJobdesk('suhu');
+        setActLocations(locs);
         if (locs.length > 0) setActFormLocation(locs[0]);
       }
     }
@@ -1414,10 +1424,14 @@ export default function App() {
     
     if (tabName === 'dashboard' || tabName === 'history') return true;
     if (tabName === 'scan') return jobdesk === 'suhu' && (role === 'Operator' || role === 'Supervisor' || role === 'Administrator');
-    if (tabName === 'activity') return (jobdesk === 'inspeksi' || jobdesk === 'analis') && (role === 'Operator' || role === 'Supervisor' || role === 'Administrator');
+    // Kegiatan: semua Operator & Supervisor, BUKAN Administrator
+    if (tabName === 'activity') return role === 'Operator' || role === 'Supervisor';
     if (tabName === 'attendance') return role === 'Operator';
     if (tabName === 'settings') return role === 'Administrator';
+    // Approval: hanya Supervisor & Manager
+    if (tabName === 'approval') return role === 'Supervisor' || role === 'Manager';
     return false;
+
   };
 
   // ----------------- RENDER LOGIN PAGE -----------------
@@ -1605,48 +1619,72 @@ export default function App() {
             </div>
 
             <div className="stats-grid">
-              <div className="glass-card stat-card">
-                <span className="label">Laporan Hari Ini</span>
-                <span className="value">{stats.totalToday}</span>
-                <span className="desc">Total pemantauan suhu</span>
-              </div>
-              <div className="glass-card stat-card">
-                <span className="label">Suhu Tertinggi Hari Ini</span>
-                <span className="value" style={{ color: stats.maxTempToday !== '-' ? 'var(--primary)' : 'var(--text-muted)' }}>
-                  {stats.maxTempToday}
-                </span>
-                <span className="desc">Suhu alat tertinggi</span>
-              </div>
+              {(currentUser.jobdesk || 'suhu') === 'suhu' && (
+                <div className="glass-card stat-card">
+                  <span className="label">Laporan Hari Ini</span>
+                  <span className="value">{stats.totalToday}</span>
+                  <span className="desc">Total pemantauan suhu</span>
+                </div>
+              )}
+              {(currentUser.jobdesk || 'suhu') === 'suhu' && (
+                <div className="glass-card stat-card">
+                  <span className="value" style={{ color: stats.maxTempToday !== '-' ? 'var(--primary)' : 'var(--text-muted)' }}>
+                    {stats.maxTempToday}
+                  </span>
+                  <span className="label">Suhu Tertinggi Hari Ini</span>
+                  <span className="desc">Suhu alat tertinggi</span>
+                </div>
+              )}
+              {(currentUser.jobdesk || 'suhu') !== 'suhu' && (
+                <div className="glass-card stat-card">
+                  <span className="label">Total Kegiatan</span>
+                  <span className="value">{activities.filter(a => new Date(a.timestamp).toDateString() === new Date().toDateString()).length}</span>
+                  <span className="desc">Kegiatan hari ini</span>
+                </div>
+              )}
+              {(currentUser.jobdesk || 'suhu') !== 'suhu' && (
+                <div className="glass-card stat-card">
+                  <span className="label">Total Arsip Kegiatan</span>
+                  <span className="value">{activities.length}</span>
+                  <span className="desc">Semua laporan kegiatan</span>
+                </div>
+              )}
             </div>
 
-            <div className="stats-grid" style={{ gridTemplateColumns: '1.2fr 0.8fr' }}>
-              <div className="glass-card stat-card" style={{ borderLeft: '4px solid var(--danger)' }}>
-                <span className="label">Peringatan Suhu Tinggi</span>
-                <span className="value" style={{ color: stats.alertCount > 0 ? 'var(--danger)' : 'var(--normal)' }}>
-                  {stats.alertCount} Laporan
-                </span>
-                <span className="desc">Mesin masuk kategori ALERT</span>
+            {(currentUser.jobdesk || 'suhu') === 'suhu' && (
+              <div className="stats-grid" style={{ gridTemplateColumns: '1.2fr 0.8fr' }}>
+                <div className="glass-card stat-card" style={{ borderLeft: '4px solid var(--danger)' }}>
+                  <span className="label">Peringatan Suhu Tinggi</span>
+                  <span className="value" style={{ color: stats.alertCount > 0 ? 'var(--danger)' : 'var(--normal)' }}>
+                    {stats.alertCount} Laporan
+                  </span>
+                  <span className="desc">Mesin masuk kategori ALERT</span>
+                </div>
+                <div className="glass-card stat-card">
+                  <span className="label">Total Arsip</span>
+                  <span className="value">{stats.allTimeTotal}</span>
+                  <span className="desc">Semua laporan suhu</span>
+                </div>
               </div>
-              <div className="glass-card stat-card">
-                <span className="label">Total Arsip</span>
-                <span className="value">{stats.allTimeTotal}</span>
-                <span className="desc">Semua laporan suhu</span>
-              </div>
-            </div>
+            )}
 
             {/* Quick Action Banners */}
-            <div style={{ display: 'grid', gridTemplateColumns: currentUser.role === 'Operator' ? '1fr 1fr' : '1fr', gap: '12px', marginBottom: '16px' }}>
-              {(currentUser.jobdesk || 'suhu') === 'suhu' ? (
+            <div style={{ display: 'grid', gridTemplateColumns: currentUser.role === 'Operator' ? ((currentUser.jobdesk || 'suhu') === 'suhu' ? '1fr 1fr 1fr' : '1fr 1fr') : '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+              {(currentUser.jobdesk || 'suhu') === 'suhu' && (
                 <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: 0, padding: '14px', background: 'linear-gradient(135deg, rgba(99,102,241,0.1) 0%, rgba(168,85,247,0.1) 100%)' }}>
                   <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>🌡️ Pindai Suhu Alat</div>
                   <button className="btn btn-primary" onClick={() => { setActiveTab('scan'); startCamera(); }} style={{ padding: '8px 12px', fontSize: '0.75rem', borderRadius: '8px' }}>
                     <Camera size={14} /> Pindai Suhu
                   </button>
                 </div>
-              ) : (
+              )}
+              {/* Kegiatan — tampil untuk semua jobdesk (suhu, inspeksi, analis) kecuali role tertentu */}
+              {(currentUser.role === 'Operator' || currentUser.role === 'Supervisor') && (
                 <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: 0, padding: '14px', background: 'linear-gradient(135deg, rgba(99,102,241,0.1) 0%, rgba(168,85,247,0.1) 100%)' }}>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>{(currentUser.jobdesk || 'suhu') === 'inspeksi' ? '🔍' : '🧪'} Kegiatan {(currentUser.jobdesk || 'suhu') === 'inspeksi' ? 'Inspeksi' : 'Analis'}</div>
-                  <button className="btn btn-primary" onClick={() => { setActiveTab('activity'); startActCamera(); }} style={{ padding: '8px 12px', fontSize: '0.75rem', borderRadius: '8px' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>
+                    {(currentUser.jobdesk || 'suhu') === 'suhu' ? '📋' : (currentUser.jobdesk === 'inspeksi' ? '🔍' : '🧪')} Kegiatan {(currentUser.jobdesk || 'suhu') === 'suhu' ? 'Lapangan' : (currentUser.jobdesk === 'inspeksi' ? 'Inspeksi' : 'Analis')}
+                  </div>
+                  <button className="btn btn-primary" onClick={() => { setActiveTab('activity'); startActCamera(); stopCamera(); stopAttCamera(); }} style={{ padding: '8px 12px', fontSize: '0.75rem', borderRadius: '8px' }}>
                     <Camera size={14} /> Ambil Foto Kegiatan
                   </button>
                 </div>
@@ -1660,6 +1698,7 @@ export default function App() {
                 </div>
               )}
             </div>
+
 
             {/* Advanced Dashboard Info */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
@@ -1717,14 +1756,16 @@ export default function App() {
               </div>
             </div>
 
-            {/* Chart Container */}
-            <div className="glass-card">
-              <h3 className="section-title">
-                <TrendingUp size={16} style={{ color: 'var(--primary)' }} />
-                Tren Suhu Terakhir
-              </h3>
-              {renderDashboardChart()}
-            </div>
+            {/* Chart Container — hanya tampil untuk jobdesk suhu */}
+            {(currentUser.jobdesk || 'suhu') === 'suhu' && (
+              <div className="glass-card">
+                <h3 className="section-title">
+                  <TrendingUp size={16} style={{ color: 'var(--primary)' }} />
+                  Tren Suhu Terakhir
+                </h3>
+                {renderDashboardChart()}
+              </div>
+            )}
           </div>
         )}
 
@@ -2050,8 +2091,119 @@ export default function App() {
           </div>
         )}
 
+        {/* ----------------- TAB: APPROVAL (Supervisor & Manager) ----------------- */}
+        {activeTab === 'approval' && isTabVisible('approval') && (() => {
+          const role = currentUser.role;
+          const jd = currentUser.jobdesk || 'suhu';
+
+          // Filter absensi yang butuh approval
+          const pendingList = attendance.filter(a => {
+            const needsAction = a.status === 'Pending SPV' || a.status === 'Pending Manager';
+            if (!needsAction) return false;
+            // Supervisor hanya melihat jobdesk-nya
+            if (role === 'Supervisor') return a.jobdesk === jd;
+            // Manager melihat semua
+            return true;
+          });
+
+          const filteredPending = approvalFilter === 'Semua'
+            ? pendingList
+            : pendingList.filter(a => a.status === approvalFilter);
+
+          const handleApprove = (id) => {
+            const rec = attendance.find(a => a.id === id);
+            if (!rec) return;
+            let updatedRec;
+            if (role === 'Supervisor' && rec.status === 'Pending SPV') {
+              updatedRec = { ...rec, status: 'Pending Manager', spvApproval: { by: currentUser.name, at: new Date().toISOString() } };
+            } else if (role === 'Manager' && rec.status === 'Pending Manager') {
+              updatedRec = { ...rec, status: 'Disetujui', managerApproval: { by: currentUser.name, at: new Date().toISOString() } };
+            } else return;
+            db.updateAttendance(updatedRec);
+            setAttendance(db.getAttendance());
+            showToast('Absensi berhasil disetujui!', 'success');
+          };
+
+          const handleReject = (id) => {
+            const rec = attendance.find(a => a.id === id);
+            if (!rec) return;
+            const updatedRec = { ...rec, status: 'Ditolak', rejectedBy: currentUser.name, rejectedAt: new Date().toISOString() };
+            db.updateAttendance(updatedRec);
+            setAttendance(db.getAttendance());
+            showToast('Absensi telah ditolak.', 'error');
+          };
+
+          return (
+            <div>
+              <div className="glass-card" style={{ marginBottom: '16px' }}>
+                <h3 className="section-title">
+                  <CheckSquare size={16} style={{ color: 'var(--primary)' }} />
+                  Persetujuan Izin / Cuti / Sakit
+                </h3>
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                  {role === 'Supervisor' ? `Menampilkan absensi divisi ${jd} yang menunggu persetujuan Anda.` : 'Menampilkan semua absensi yang menunggu persetujuan akhir.'}
+                </p>
+                {/* Filter buttons */}
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  {['Semua', 'Pending SPV', 'Pending Manager'].map(f => (
+                    <button key={f} onClick={() => setApprovalFilter(f)}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.7rem', padding: '4px 10px', background: approvalFilter === f ? 'var(--primary)' : '', color: approvalFilter === f ? '#fff' : '' }}>
+                      {f}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {filteredPending.length === 0 ? (
+                <div className="glass-card" style={{ textAlign: 'center', padding: '40px 20px' }}>
+                  <CheckCircle size={40} style={{ color: 'var(--normal)', margin: '0 auto 12px' }} />
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Tidak ada absensi yang menunggu persetujuan.</p>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {filteredPending.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)).map(rec => (
+                    <div key={rec.id} className="glass-card" style={{ padding: '14px', marginBottom: 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
+                        <div>
+                          <div style={{ fontWeight: '700', fontSize: '0.9rem' }}>{rec.officer}</div>
+                          <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{new Date(rec.timestamp).toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                          <span className={`status-badge ${rec.type === 'Sakit' ? 'warning' : rec.type === 'Izin' ? 'normal' : 'info'}`} style={{ fontSize: '0.65rem' }}>{rec.type}</span>
+                          <span className="status-badge warning" style={{ fontSize: '0.6rem' }}>{rec.status}</span>
+                        </div>
+                      </div>
+                      {rec.notes && (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.03)', padding: '8px', borderRadius: '6px', marginBottom: '10px' }}>
+                          📝 {rec.notes}
+                        </div>
+                      )}
+                      {rec.image && (
+                        <img src={rec.image} alt="Bukti" style={{ width: '100%', maxHeight: '150px', objectFit: 'cover', borderRadius: '8px', marginBottom: '10px', border: '1px solid var(--card-border)' }} />
+                      )}
+                      {/* Tombol aksi hanya muncul jika status sesuai role */}
+                      {((role === 'Supervisor' && rec.status === 'Pending SPV') || (role === 'Manager' && rec.status === 'Pending Manager')) && (
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button className="btn btn-primary" onClick={() => handleApprove(rec.id)} style={{ flex: 1, fontSize: '0.75rem', padding: '8px' }}>
+                            <CheckCircle size={14} /> Setujui
+                          </button>
+                          <button className="btn btn-secondary" onClick={() => handleReject(rec.id)} style={{ flex: 1, fontSize: '0.75rem', padding: '8px', color: 'var(--danger)', borderColor: 'rgba(239,68,68,0.3)' }}>
+                            <X size={14} /> Tolak
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* ----------------- TAB: ATTENDANCE (Absensi) ----------------- */}
         {activeTab === 'attendance' && isTabVisible('attendance') && (
+
           <div>
             <div className="glass-card">
               <h3 className="section-title">
@@ -3445,6 +3597,26 @@ ALTER TABLE activities DISABLE ROW LEVEL SECURITY;`}
             <span>Kegiatan</span>
           </div>
         )}
+
+        {isTabVisible('approval') && (() => {
+          const jd = currentUser.jobdesk || 'suhu';
+          const pendingCount = attendance.filter(a => {
+            if (currentUser.role === 'Supervisor') return a.status === 'Pending SPV' && a.jobdesk === jd;
+            if (currentUser.role === 'Manager') return a.status === 'Pending Manager';
+            return false;
+          }).length;
+          return (
+            <div className={`nav-item ${activeTab === 'approval' ? 'active' : ''}`} onClick={() => { setActiveTab('approval'); stopCamera(); stopAttCamera(); stopActCamera(); }} style={{ position: 'relative' }}>
+              <CheckSquare />
+              <span>Approval</span>
+              {pendingCount > 0 && (
+                <span style={{ position: 'absolute', top: '2px', right: '8px', background: 'var(--danger)', color: '#fff', borderRadius: '50%', width: '16px', height: '16px', fontSize: '0.55rem', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold' }}>
+                  {pendingCount}
+                </span>
+              )}
+            </div>
+          );
+        })()}
 
         {isTabVisible('attendance') && (
           <div className={`nav-item ${activeTab === 'attendance' ? 'active' : ''}`} onClick={() => { setActiveTab('attendance'); startAttCamera(); stopCamera(); stopActCamera(); }}>
