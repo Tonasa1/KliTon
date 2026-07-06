@@ -2100,8 +2100,8 @@ export default function App() {
           const pendingList = attendance.filter(a => {
             const needsAction = a.status === 'Pending SPV' || a.status === 'Pending Manager';
             if (!needsAction) return false;
-            // Supervisor hanya melihat jobdesk-nya
-            if (role === 'Supervisor') return a.jobdesk === jd;
+            // Supervisor hanya melihat jobdesk-nya, atau data lama yang tidak punya jobdesk
+            if (role === 'Supervisor') return !a.jobdesk || a.jobdesk === jd;
             // Manager melihat semua
             return true;
           });
