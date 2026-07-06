@@ -241,6 +241,7 @@ export default function App() {
           setReports(res.reports);
           setAttendance(res.attendance);
           if (res.activities) setActivities(res.activities);
+          setUsers(db.getUsers());
           showToast("Data tersinkronisasi otomatis dengan Cloud DB.", "success");
         }
       }).catch(err => {
@@ -250,6 +251,27 @@ export default function App() {
       });
     }
   }, []);
+
+  // Auto-refresh dari cloud setiap 30 detik
+  useEffect(() => {
+    const config = db.getSupabaseConfig();
+    if (!config.url || !config.key) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await db.syncWithCloud();
+        if (res) {
+          setReports(res.reports);
+          setAttendance(res.attendance);
+          if (res.activities) setActivities(res.activities);
+          setUsers(db.getUsers());
+        }
+      } catch (e) {
+        // silent fail for background sync
+      }
+    }, 30000); // setiap 30 detik
+    return () => clearInterval(interval);
+  }, []);
+
 
   // Update default login usernames based on role and jobdesk
   useEffect(() => {
@@ -467,20 +489,20 @@ export default function App() {
   // --- CAMERA MANAGEMENT (Absensi) ---
   const startAttCamera = async () => {
     setAttImage(null);
-    lockGeolocation(); // Auto-start locking GPS when camera starts
+    lockGeolocation();
     try {
       setAttCameraActive(true);
       setTimeout(async () => {
         if (!attVideoRef.current) return;
         const constraints = {
-          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, // Selfie camera
+          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
           audio: false
         };
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         attStreamRef.current = stream;
         attVideoRef.current.srcObject = stream;
-        attVideoRef.current.play();
-      }, 300);
+        await attVideoRef.current.play();
+      }, 600); // Delay diperbesar agar elemen video sudah ter-mount
     } catch (err) {
       console.error("Camera access error:", err);
       showToast("Gagal mengakses kamera depan. Gunakan tombol 'Unggah Foto'.", "error");
@@ -513,8 +535,8 @@ export default function App() {
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         actStreamRef.current = stream;
         actVideoRef.current.srcObject = stream;
-        actVideoRef.current.play();
-      }, 300);
+        await actVideoRef.current.play();
+      }, 600); // Delay diperbesar agar elemen video sudah ter-mount
     } catch (err) {
       console.error("Activity camera error:", err);
       showToast("Gagal mengakses kamera.", "error");
@@ -1613,10 +1635,37 @@ export default function App() {
               <h2 style={{ fontSize: '1.05rem', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 👋 Selamat datang, {currentUser.role === 'Operator' ? `Operator ${currentUser.name}` : currentUser.name}
               </h2>
-              <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', display: 'block', marginTop: '2px' }}>
-                {new Date().toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-              </span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                  {new Date().toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                </span>
+                <button
+                  onClick={async () => {
+                    const config = db.getSupabaseConfig();
+                    if (!config.url || !config.key) { showToast('Cloud belum dikonfigurasi.', 'error'); return; }
+                    setSyncLoading(true);
+                    try {
+                      const res = await db.syncWithCloud();
+                      if (res) {
+                        setReports(res.reports);
+                        setAttendance(res.attendance);
+                        if (res.activities) setActivities(res.activities);
+                        setUsers(db.getUsers());
+                        showToast('Data berhasil diperbarui dari Cloud!', 'success');
+                      }
+                    } catch(e) {
+                      showToast('Gagal refresh data.', 'error');
+                    } finally {
+                      setSyncLoading(false);
+                    }
+                  }}
+                  style={{ background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)', color: 'var(--primary)', borderRadius: '8px', padding: '4px 10px', fontSize: '0.65rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <RefreshCw size={10} style={{ animation: syncLoading ? 'spin 1s linear infinite' : 'none' }} />
+                  {syncLoading ? 'Memuat...' : 'Refresh Data'}
+                </button>
+              </div>
             </div>
+
 
             <div className="stats-grid">
               {(currentUser.jobdesk || 'suhu') === 'suhu' && (
