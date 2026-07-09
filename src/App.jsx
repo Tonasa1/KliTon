@@ -747,9 +747,6 @@ export default function App() {
         if (acc === 0) {
           isFake = true;
         }
-        if (duration < 10) {
-          isFake = true;
-        }
         if (Number.isInteger(lat) && Number.isInteger(lon)) {
           isFake = true;
         }
@@ -784,7 +781,7 @@ export default function App() {
           error: error.message
         });
       },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 10000 }
     );
   };
 
