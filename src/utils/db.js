@@ -132,6 +132,32 @@ if (!localStorage.getItem(ANALIS_LOCATIONS_KEY)) {
 }
 
 export const db = {
+  _safeSetItem(key, list) {
+    try {
+      localStorage.setItem(key, JSON.stringify(list));
+    } catch (e) {
+      console.warn("Quota exceeded! Stripping oldest images to free space...");
+      let success = false;
+      for (let i = list.length - 1; i >= 0; i--) {
+        if (list[i].image && list[i].image.length > 100) {
+          list[i].image = ''; // Strip image
+          try {
+            localStorage.setItem(key, JSON.stringify(list));
+            success = true;
+            break;
+          } catch (err) {}
+        }
+      }
+      if (!success) {
+        try {
+          localStorage.setItem(key, JSON.stringify(list.slice(0, 50)));
+        } catch (err) {
+          console.error("Still exceeding quota after slicing.");
+        }
+      }
+    }
+  },
+
   // --- SESSION LOGIN SYSTEM ---
   login(role, username, password, jobdesk = 'suhu') {
     const users = this.getUsers();
@@ -193,7 +219,7 @@ export const db = {
         ...report
       };
       reports.push(newReport);
-      localStorage.setItem(REPORTS_KEY, JSON.stringify(reports));
+      this._safeSetItem(REPORTS_KEY, reports);
       this.uploadReportToCloud(newReport); // Upload to Supabase in background
       return newReport;
     } catch (e) {
@@ -206,7 +232,7 @@ export const db = {
     try {
       const reports = this.getReports();
       const filtered = reports.filter(r => r.id !== id);
-      localStorage.setItem(REPORTS_KEY, JSON.stringify(filtered));
+      this._safeSetItem(REPORTS_KEY, filtered);
       return true;
     } catch (e) {
       console.error('Failed to delete report:', e);
@@ -244,7 +270,7 @@ export const db = {
         ...attendance
       };
       list.push(newEntry);
-      localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(list));
+      this._safeSetItem(ATTENDANCE_KEY, list);
       this.uploadAttendanceToCloud(newEntry); // Upload to Supabase in background
       return newEntry;
     } catch (e) {
@@ -257,7 +283,7 @@ export const db = {
     try {
       const list = this.getAttendance();
       const filtered = list.filter(a => a.id !== id);
-      localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(filtered));
+      this._safeSetItem(ATTENDANCE_KEY, filtered);
       return true;
     } catch (e) {
       return false;
@@ -270,7 +296,7 @@ export const db = {
       const idx = list.findIndex(a => a.id === updatedRecord.id);
       if (idx === -1) return false;
       list[idx] = updatedRecord;
-      localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(list));
+      this._safeSetItem(ATTENDANCE_KEY, list);
       // Upload perubahan ke Supabase
       this.uploadAttendanceToCloud(updatedRecord);
       return true;
@@ -309,7 +335,7 @@ export const db = {
         ...activity
       };
       list.push(newEntry);
-      localStorage.setItem(ACTIVITIES_KEY, JSON.stringify(list));
+      this._safeSetItem(ACTIVITIES_KEY, list);
       this.uploadActivityToCloud(newEntry);
       return newEntry;
     } catch (e) {
@@ -322,7 +348,7 @@ export const db = {
     try {
       const list = this.getActivities();
       const filtered = list.filter(a => a.id !== id);
-      localStorage.setItem(ACTIVITIES_KEY, JSON.stringify(filtered));
+      this._safeSetItem(ACTIVITIES_KEY, filtered);
       return true;
     } catch (e) {
       return false;
@@ -837,7 +863,7 @@ export const db = {
       const mergedReports = Array.from(mergedReportsMap.values())
         .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
         
-      localStorage.setItem(REPORTS_KEY, JSON.stringify(mergedReports));
+      this._safeSetItem(REPORTS_KEY, mergedReports);
 
       // 3. Merge Attendance
       const localAtt = this.getAttendance();
@@ -849,7 +875,7 @@ export const db = {
       const mergedAtt = Array.from(mergedAttMap.values())
         .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
         
-      localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(mergedAtt));
+      this._safeSetItem(ATTENDANCE_KEY, mergedAtt);
 
       // 4. Upload missing local reports to cloud
       const cloudReportIds = new Set(cloudReports.map(r => r.id));
@@ -907,7 +933,7 @@ export const db = {
       localActivities.forEach(a => mergedActMap.set(a.id, a));
       const mergedActivities = Array.from(mergedActMap.values())
         .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-      localStorage.setItem(ACTIVITIES_KEY, JSON.stringify(mergedActivities));
+      this._safeSetItem(ACTIVITIES_KEY, mergedActivities);
 
       // 8. Upload missing local activities to cloud
       const cloudActIds = new Set(cloudActivities.map(a => a.id));
