@@ -563,7 +563,7 @@ export default function App() {
     canvas.width = video.videoWidth || 640;
     canvas.height = video.videoHeight || 480;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.5);
     setActImage(dataUrl);
     stopActCamera();
   };
@@ -678,7 +678,7 @@ export default function App() {
     ctx.fillText('KliTon Timemark Verified', width - 150, 12);
     
     setAttGpsLoading(false);
-    return canvas.toDataURL('image/jpeg', 0.92);
+    return canvas.toDataURL('image/jpeg', 0.5);
   };
 
   const captureAttPhoto = async () => {
