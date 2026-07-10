@@ -1237,9 +1237,9 @@ export default function App() {
     if (currentUser) {
       if (currentUser.role === 'Operator') {
         if (a.officer !== currentUser.name) return false;
-      } else if (currentUser.role === 'Supervisor' && currentUser.name !== 'supervisor') {
+      } else if (currentUser.role === 'Supervisor') {
         // SPV specific jobdesk
-        if (a.jobdesk !== currentUser.jobdesk) return false;
+        if (a.jobdesk && a.jobdesk !== currentUser.jobdesk) return false;
       }
     }
     
@@ -1264,10 +1264,8 @@ export default function App() {
     // Role-based filter: Operator only sees their own activities
     if (currentUser && currentUser.role === 'Operator') {
       if (a.officer !== currentUser.name) return false;
-    }
-    // Jobdesk filter
-    if (currentUser && currentUser.jobdesk) {
-      if (a.jobdesk !== currentUser.jobdesk) return false;
+    } else if (currentUser && currentUser.role === 'Supervisor') {
+      if (a.jobdesk && a.jobdesk !== currentUser.jobdesk) return false;
     }
     const matchLocation = filterActLocation === 'Semua' || a.location === filterActLocation;
     const term = searchActQuery.toLowerCase();
