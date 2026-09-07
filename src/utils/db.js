@@ -1188,5 +1188,56 @@ export const db = {
     } catch (e) {
       console.error("Failed to delete user from cloud:", e);
     }
+  },
+
+  // --- STRIP ALL IMAGES FROM CLOUD TO FREE STORAGE ---
+  async stripAllCloudImages() {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return { success: false, message: 'Cloud belum dikonfigurasi.' };
+    
+    const headers = { 
+      'apikey': key, 
+      'Authorization': `Bearer ${key}`, 
+      'Content-Type': 'application/json' 
+    };
+    
+    let totalStripped = 0;
+    const tables = ['reports', 'attendance', 'activities'];
+    
+    for (const table of tables) {
+      try {
+        // Get all records with images
+        const res = await fetch(`${url}/rest/v1/${table}?select=id,image&image=not.is.null&limit=1000`, { headers });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const withImages = data.filter(d => d.image && d.image.length > 10);
+        
+        for (const record of withImages) {
+          try {
+            await fetch(`${url}/rest/v1/${table}?id=eq.${record.id}`, {
+              method: 'PATCH',
+              headers,
+              body: JSON.stringify({ image: null })
+            });
+            totalStripped++;
+          } catch (e) {
+            // skip individual errors
+          }
+        }
+      } catch (e) {
+        console.error(`Error stripping images from ${table}:`, e);
+      }
+    }
+    
+    // Also strip images from localStorage
+    for (const storageKey of [REPORTS_KEY, ATTENDANCE_KEY, ACTIVITIES_KEY]) {
+      try {
+        const data = JSON.parse(localStorage.getItem(storageKey) || '[]');
+        data.forEach(item => { if (item.image) item.image = null; });
+        localStorage.setItem(storageKey, JSON.stringify(data));
+      } catch (e) {}
+    }
+    
+    return { success: true, total: totalStripped };
   }
 };
