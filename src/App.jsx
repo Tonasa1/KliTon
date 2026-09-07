@@ -869,7 +869,7 @@ export default function App() {
       location: formLocation,
       officer: currentUser.role === 'Operator' ? currentUser.name : formOfficer,
       notes: formNotes,
-      image: capturedImage
+      image: null // Foto tidak disimpan untuk menghemat ruang penyimpanan
     };
     const saved = db.saveReport(newReport);
     if (saved) {
@@ -891,10 +891,7 @@ export default function App() {
       showToast("Harap pilih nama petugas!", "error");
       return;
     }
-    if (!attImage) {
-      showToast("Harap ambil atau unggah foto absensi!", "error");
-      return;
-    }
+    // Foto absensi sekarang opsional (tidak wajib) untuk menghemat memori
     if (attGpsLoading) {
       showToast("Sedang mengunci lokasi GPS, harap tunggu...", "error");
       return;
@@ -940,10 +937,7 @@ export default function App() {
   // --- ACTIVITY SUBMISSION ---
   const handleSubmitActivity = (e) => {
     e.preventDefault();
-    if (!actImage) {
-      showToast("Harap ambil atau unggah foto kegiatan!", "error");
-      return;
-    }
+    // Foto kegiatan sekarang opsional (tidak wajib) untuk menghemat memori
     if (!actFormDescription.trim()) {
       showToast("Harap isi keterangan kegiatan!", "error");
       return;
@@ -954,7 +948,7 @@ export default function App() {
       location: actFormLocation,
       description: actFormDescription,
       notes: actFormNotes,
-      image: actImage
+      image: actImage || null // Foto kegiatan sekarang opsional
     };
     const saved = db.saveActivity(newActivity);
     if (saved) {
@@ -3342,6 +3336,26 @@ ALTER TABLE activities DISABLE ROW LEVEL SECURITY;`}
               </button>
               <button className="btn btn-secondary" onClick={handleResetAttendance} style={{ width: '100%', borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.05)' }}>
                 <Trash2 size={16} /> Hapus Semua Data Absensi
+              </button>
+              <button className="btn btn-secondary" onClick={async () => {
+                if (window.confirm("PERINGATAN! Semua gambar/foto yang tersimpan di Cloud dan perangkat akan DIHAPUS PERMANEN untuk menghemat ruang penyimpanan. Data teks (nama, waktu, lokasi) tetap aman. Lanjutkan?")) {
+                  showToast("Sedang menghapus gambar... Harap tunggu.", "success");
+                  try {
+                    const result = await db.stripAllCloudImages();
+                    if (result.success) {
+                      setReports(db.getReports());
+                      setAttendance(db.getAttendance());
+                      setActivities(db.getActivities());
+                      showToast(`Berhasil menghapus ${result.total} gambar dari Cloud & perangkat!`, "success");
+                    } else {
+                      showToast(result.message || "Gagal menghapus gambar.", "error");
+                    }
+                  } catch (e) {
+                    showToast("Gagal menghapus gambar: " + e.message, "error");
+                  }
+                }
+              }} style={{ width: '100%', borderColor: 'rgba(251, 146, 60, 0.4)', color: '#fb923c', background: 'rgba(251, 146, 60, 0.05)' }}>
+                <Trash2 size={16} /> Hapus Semua Gambar (Hemat Memori)
               </button>
             </div>
           </div>
