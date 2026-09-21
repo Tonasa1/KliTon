@@ -76,6 +76,51 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
   return d; // Distance in meters
 };
 
+// Get specific Geofence target based on jobdesk and shift
+const getTargetGeofence = (jobdesk, shift, settings) => {
+  const jd = (jobdesk || 'suhu').toLowerCase();
+  const isShiftType = ['Shift 1', 'Shift 2', 'Shift 3'].includes(shift);
+
+  if (jd === 'suhu') {
+    if (isShiftType) {
+      return {
+        lat: settings.geofenceSuhuShiftLat ?? settings.geofenceLat,
+        lon: settings.geofenceSuhuShiftLon ?? settings.geofenceLon,
+        radius: settings.geofenceSuhuShiftRadius ?? settings.geofenceRadius ?? 100,
+        label: 'Suhu - Shift (1, 2, 3)'
+      };
+    } else {
+      return {
+        lat: settings.geofenceSuhuDayLat ?? settings.geofenceLat,
+        lon: settings.geofenceSuhuDayLon ?? settings.geofenceLon,
+        radius: settings.geofenceSuhuDayRadius ?? settings.geofenceRadius ?? 100,
+        label: "Suhu - Day Shift & Piket"
+      };
+    }
+  } else if (jd === 'inspeksi') {
+    return {
+      lat: settings.geofenceInspeksiShiftLat ?? settings.geofenceLat,
+      lon: settings.geofenceInspeksiShiftLon ?? settings.geofenceLon,
+      radius: settings.geofenceInspeksiShiftRadius ?? settings.geofenceRadius ?? 100,
+      label: 'Inspeksi - Shift (1, 2, 3)'
+    };
+  } else if (jd === 'analis') {
+    return {
+      lat: settings.geofenceAnalisDayLat ?? settings.geofenceLat,
+      lon: settings.geofenceAnalisDayLon ?? settings.geofenceLon,
+      radius: settings.geofenceAnalisDayRadius ?? settings.geofenceRadius ?? 100,
+      label: "Analis - Day Shift & Piket"
+    };
+  }
+
+  return {
+    lat: settings.geofenceLat || -4.786256,
+    lon: settings.geofenceLon || 119.614108,
+    radius: settings.geofenceRadius || 100,
+    label: 'Area Umum'
+  };
+};
+
 export default function App() {
   // Authentication & Session States
   const [currentUser, setCurrentUser] = useState(null); // { role, name }
@@ -112,6 +157,7 @@ export default function App() {
   const [attGpsLoading, setAttGpsLoading] = useState(false);
   const [attGpsData, setAttGpsData] = useState(null); // { latitude, longitude, accuracy, isFakeGps }
   const [attNotes, setAttNotes] = useState('');
+  const [attShift, setAttShift] = useState('Day Shift');
   
   // History Sub-Tab States
   const [historySubTab, setHistorySubTab] = useState('suhu'); // 'suhu' | 'absensi'
@@ -903,10 +949,76 @@ export default function App() {
       if (u && u.jobdesk) attJobdesk = u.jobdesk;
     }
 
-    const isApprovalRequired = ['Sakit', 'Izin', 'Cuti'].includes(attType);
+    let computedNotes = attNotes || '';
+    const now = new Date();
+    const officerName = currentUser.role === 'Operator' ? currentUser.name : attOfficer;
+    const todayStr = now.toDateString();
+    
+    // Get existing today's attendance for this officer
+    const todayAtts = attendance.filter(a => a.officer === officerName && new Date(a.timestamp).toDateString() === todayStr);
+
+    // 1. LOGIKA CHECK IN (Shift & Late/Izin Calculation)
+    if (attType === 'Check In') {
+      computedNotes = `[Jadwal: ${attShift}] ` + computedNotes;
+      
+      // Hitung keterlambatan berdasarkan Shift
+      let expectedHour = 7, expectedMin = 30; // Default 07.30
+      if (attShift === 'Shift 2') { expectedHour = 15; expectedMin = 30; }
+      else if (attShift === 'Shift 3') { expectedHour = 22; expectedMin = 30; }
+
+      const expectedTime = new Date(now);
+      expectedTime.setHours(expectedHour, expectedMin, 0, 0);
+
+      const diffMs = now - expectedTime;
+      const diffMins = Math.floor(diffMs / 60000);
+
+      if (diffMins > 0) {
+        if (diffMins <= 30) {
+          computedNotes += ` | ⚠️ Terlambat: ${diffMins} Menit`;
+        } else {
+          // > 30 Menit digenapkan ke atas per 1 jam sebagai Izin
+          const izinHours = Math.ceil(diffMins / 60);
+          computedNotes += ` | 🚪 Terhitung Izin Masuk: ${izinHours} Jam (${diffMins} Menit Keterlambatan)`;
+        }
+      }
+    }
+
+    // 2. LOGIKA SELESAI ISTIRAHAT (Hitung Durasi Istirahat)
+    if (attType === 'Selesai Istirahat') {
+      const lastMulaiIstirahat = todayAtts.find(a => a.type === 'Mulai Istirahat');
+      if (lastMulaiIstirahat) {
+        const start = new Date(lastMulaiIstirahat.timestamp);
+        const durMins = Math.round((now - start) / 60000);
+        computedNotes += ` | ☕ Total Durasi Istirahat: ${durMins} Menit`;
+      }
+    }
+
+    // 3. LOGIKA IZIN KEMBALI (Hitung Durasi Izin Jam Kerja)
+    if (attType === 'Izin Kembali') {
+      const lastIzinKeluar = todayAtts.find(a => a.type === 'Izin Keluar');
+      if (lastIzinKeluar) {
+        const start = new Date(lastIzinKeluar.timestamp);
+        const durMins = Math.round((now - start) / 60000);
+        const durHours = (durMins / 60).toFixed(1);
+        computedNotes += ` | 🚪 Total Durasi Izin Jam Kerja: ${durMins} Menit (~${durHours} Jam)`;
+      }
+    }
+
+    // 4. LOGIKA CHECK OUT (Cek jika ada Izin Keluar tanpa Izin Kembali)
+    if (attType === 'Check Out') {
+      const lastIzinKeluar = todayAtts.find(a => a.type === 'Izin Keluar');
+      const hasIzinKembaliAfter = lastIzinKeluar && todayAtts.some(a => a.type === 'Izin Kembali' && new Date(a.timestamp) > new Date(lastIzinKeluar.timestamp));
+      
+      if (lastIzinKeluar && !hasIzinKembaliAfter) {
+        const start = new Date(lastIzinKeluar.timestamp);
+        const durMins = Math.round((now - start) / 60000);
+        const durHours = Math.ceil(durMins / 60);
+        computedNotes += ` | 🚪 Terhitung Izin Pulang Langsung: ${durHours} Jam (${durMins} Menit dari jam izin ${start.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })})`;
+      }
+    }
 
     const newAttendance = {
-      officer: currentUser.role === 'Operator' ? currentUser.name : attOfficer,
+      officer: officerName,
       jobdesk: attJobdesk,
       type: attType,
       image: attImage,
@@ -914,7 +1026,7 @@ export default function App() {
       longitude: attGpsData ? attGpsData.longitude : null,
       gpsAccuracy: attGpsData ? attGpsData.accuracy : null,
       isFakeGps: attGpsData ? attGpsData.isFakeGps : false,
-      notes: isApprovalRequired ? attNotes : '',
+      notes: computedNotes,
       status: isApprovalRequired ? 'Pending SPV' : 'Disetujui',
       spvApproval: null,
       managerApproval: null
@@ -2121,6 +2233,26 @@ export default function App() {
                   />
                 </div>
 
+                {/* Shift / Jadwal Kerja Selection */}
+                {attType === 'Check In' && (
+                  <div className="form-group">
+                    <label>Pilihan Jadwal / Shift Kerja *</label>
+                    <select 
+                      className="form-control"
+                      value={attShift}
+                      onChange={(e) => setAttShift(e.target.value)}
+                      required
+                    >
+                      <option value="Day Shift">Day Shift (07.30 - 16.30 / Jm'at 17.00)</option>
+                      <option value="Shift 1">Shift 1 (07.30 - 15.30)</option>
+                      <option value="Shift 2">Shift 2 (15.30 - 22.30)</option>
+                      <option value="Shift 3">Shift 3 (22.30 - 07.30)</option>
+                      <option value="Piket">Piket (07.30 - 16.30 / Jm'at 17.00)</option>
+                      <option value="Lembur">Lembur</option>
+                    </select>
+                  </div>
+                )}
+
                 {/* Type Selection */}
                 <div className="form-group">
                   <label>Tipe Absensi</label>
@@ -2142,6 +2274,44 @@ export default function App() {
                       🟠 Check Out (Keluar)
                     </button>
                   </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '8px' }}>
+                    <button 
+                      type="button" 
+                      className={`btn ${attType === 'Mulai Istirahat' ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => setAttType('Mulai Istirahat')}
+                      style={attType === 'Mulai Istirahat' ? { background: 'linear-gradient(135deg, #8b5cf6, #7c3aed)', border: 'none', boxShadow: '0 4px 10px rgba(139,92,246,0.2)', fontSize: '0.75rem', padding: '8px 4px' } : { fontSize: '0.75rem', padding: '8px 4px' }}
+                    >
+                      ☕ Keluar Istirahat
+                    </button>
+                    <button 
+                      type="button" 
+                      className={`btn ${attType === 'Selesai Istirahat' ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => setAttType('Selesai Istirahat')}
+                      style={attType === 'Selesai Istirahat' ? { background: 'linear-gradient(135deg, #6366f1, #4f46e5)', border: 'none', boxShadow: '0 4px 10px rgba(99,102,241,0.2)', fontSize: '0.75rem', padding: '8px 4px' } : { fontSize: '0.75rem', padding: '8px 4px' }}
+                    >
+                      🍱 Masuk Istirahat
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '8px' }}>
+                    <button 
+                      type="button" 
+                      className={`btn ${attType === 'Izin Keluar' ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => setAttType('Izin Keluar')}
+                      style={attType === 'Izin Keluar' ? { background: 'linear-gradient(135deg, #ec4899, #db2777)', border: 'none', boxShadow: '0 4px 10px rgba(236,72,153,0.2)', fontSize: '0.75rem', padding: '8px 4px' } : { fontSize: '0.75rem', padding: '8px 4px' }}
+                    >
+                      🚪 Izin Keluar (Jam)
+                    </button>
+                    <button 
+                      type="button" 
+                      className={`btn ${attType === 'Izin Kembali' ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => setAttType('Izin Kembali')}
+                      style={attType === 'Izin Kembali' ? { background: 'linear-gradient(135deg, #14b8a6, #0d9488)', border: 'none', boxShadow: '0 4px 10px rgba(20,184,166,0.2)', fontSize: '0.75rem', padding: '8px 4px' } : { fontSize: '0.75rem', padding: '8px 4px' }}
+                    >
+                      🏢 Izin Kembali (Masuk)
+                    </button>
+                  </div>
+
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginTop: '8px' }}>
                     <button 
                       type="button" 
@@ -2153,11 +2323,11 @@ export default function App() {
                     </button>
                     <button 
                       type="button" 
-                      className={`btn ${attType === 'Izin' ? 'btn-primary' : 'btn-secondary'}`}
-                      onClick={() => setAttType('Izin')}
-                      style={attType === 'Izin' ? { background: 'linear-gradient(135deg, #3b82f6, #2563eb)', border: 'none', boxShadow: '0 4px 10px rgba(59,130,246,0.2)', fontSize: '0.7rem', padding: '8px 4px' } : { fontSize: '0.7rem', padding: '8px 4px' }}
+                      className={`btn ${attType === 'Izin (Hari)' ? 'btn-primary' : 'btn-secondary'}`}
+                      onClick={() => setAttType('Izin (Hari)')}
+                      style={attType === 'Izin (Hari)' ? { background: 'linear-gradient(135deg, #3b82f6, #2563eb)', border: 'none', boxShadow: '0 4px 10px rgba(59,130,246,0.2)', fontSize: '0.7rem', padding: '8px 4px' } : { fontSize: '0.7rem', padding: '8px 4px' }}
                     >
-                      🔵 Izin
+                      🔵 Izin (Hari)
                     </button>
                     <button 
                       type="button" 
@@ -2209,14 +2379,15 @@ export default function App() {
                           {/* Geofence Distance Indicator */}
                           {(() => {
                             if (settings.enableGeofence && ['Check In', 'Check Out'].includes(attType)) {
+                              const target = getTargetGeofence(currentUser.jobdesk, attShift, settings);
                               const dist = calculateDistance(
                                 attGpsData.latitude,
                                 attGpsData.longitude,
-                                settings.geofenceLat,
-                                settings.geofenceLon
+                                target.lat,
+                                target.lon
                               );
                               if (dist !== null) {
-                                const isWithin = dist <= settings.geofenceRadius;
+                                const isWithin = dist <= target.radius;
                                 return (
                                   <div style={{ 
                                     marginTop: '8px', 
@@ -2227,10 +2398,10 @@ export default function App() {
                                     fontSize: '0.75rem' 
                                   }}>
                                     <div style={{ fontWeight: 'bold', color: isWithin ? '#10b981' : '#ef4444' }}>
-                                      {isWithin ? '🟢 Anda berada di dalam area absensi' : '🔴 Anda berada di luar area absensi'}
+                                      {isWithin ? `🟢 Anda berada di dalam area (${target.label})` : `🔴 Anda berada di luar area (${target.label})`}
                                     </div>
                                     <div style={{ color: 'var(--text-secondary)', marginTop: '2px' }}>
-                                      Jarak ke kantor: <strong>{dist.toFixed(1)} meter</strong> (Batas Maksimal: {settings.geofenceRadius} meter)
+                                      Jarak ke posisi: <strong>{dist.toFixed(1)} meter</strong> (Batas Maksimal: {target.radius} meter)
                                     </div>
                                   </div>
                                 );
@@ -2265,6 +2436,7 @@ export default function App() {
                 )}
 
                 {(() => {
+                  const target = getTargetGeofence(currentUser.jobdesk, attShift, settings);
                   const isGeofenceBlocked = 
                     settings.enableGeofence && 
                     ['Check In', 'Check Out'].includes(attType) && 
@@ -2273,9 +2445,9 @@ export default function App() {
                     calculateDistance(
                       attGpsData.latitude,
                       attGpsData.longitude,
-                      settings.geofenceLat,
-                      settings.geofenceLon
-                    ) > settings.geofenceRadius;
+                      target.lat,
+                      target.lon
+                    ) > target.radius;
 
                   return (
                     <button 
@@ -2869,75 +3041,112 @@ export default function App() {
               </div>
 
               {settings.enableGeofence && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div className="form-group">
-                      <label>Latitude Kantor</label>
-                      <input 
-                        type="number" 
-                        step="0.000001" 
-                        placeholder="-6.200000"
-                        className="form-control"
-                        value={settings.geofenceLat !== undefined ? settings.geofenceLat : ''}
-                        onChange={(e) => setSettings({ ...settings, geofenceLat: parseFloat(e.target.value) })}
-                        required
-                      />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  {/* 1. Suhu - Day Shift & Piket */}
+                  <div style={{ background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '10px', border: '1px solid var(--card-border)' }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--primary)', marginBottom: '8px' }}>
+                      1. Suhu — Day Shift & Piket
                     </div>
-                    <div className="form-group">
-                      <label>Longitude Kantor</label>
-                      <input 
-                        type="number" 
-                        step="0.000001" 
-                        placeholder="106.816666"
-                        className="form-control"
-                        value={settings.geofenceLon !== undefined ? settings.geofenceLon : ''}
-                        onChange={(e) => setSettings({ ...settings, geofenceLon: parseFloat(e.target.value) })}
-                        required
-                      />
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                      <div>
+                        <label style={{ fontSize: '0.65rem' }}>Latitude</label>
+                        <input type="number" step="0.000001" className="form-control" style={{ fontSize: '0.75rem', padding: '6px' }}
+                          value={settings.geofenceSuhuDayLat ?? -4.786256}
+                          onChange={(e) => setSettings({ ...settings, geofenceSuhuDayLat: parseFloat(e.target.value) })} required />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.65rem' }}>Longitude</label>
+                        <input type="number" step="0.000001" className="form-control" style={{ fontSize: '0.75rem', padding: '6px' }}
+                          value={settings.geofenceSuhuDayLon ?? 119.614108}
+                          onChange={(e) => setSettings({ ...settings, geofenceSuhuDayLon: parseFloat(e.target.value) })} required />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.65rem' }}>Radius (M)</label>
+                        <input type="number" className="form-control" style={{ fontSize: '0.75rem', padding: '6px' }}
+                          value={settings.geofenceSuhuDayRadius ?? 100}
+                          onChange={(e) => setSettings({ ...settings, geofenceSuhuDayRadius: parseInt(e.target.value, 10) })} required />
+                      </div>
                     </div>
                   </div>
 
-                  <div className="form-group">
-                    <button 
-                      type="button" 
-                      className="btn btn-secondary" 
-                      onClick={() => {
-                        if (!navigator.geolocation) {
-                          showToast("Geolocation tidak didukung browser ini.", "error");
-                          return;
-                        }
-                        navigator.geolocation.getCurrentPosition(
-                          (position) => {
-                            setSettings({
-                              ...settings,
-                              geofenceLat: parseFloat(position.coords.latitude.toFixed(6)),
-                              geofenceLon: parseFloat(position.coords.longitude.toFixed(6))
-                            });
-                            showToast("Koordinat lokasi admin saat ini berhasil diisi.", "success");
-                          },
-                          (err) => {
-                            showToast("Gagal mengambil lokasi admin: " + err.message, "error");
-                          }
-                        );
-                      }}
-                      style={{ fontSize: '0.75rem', padding: '6px 12px', width: '100%', marginBottom: '8px' }}
-                    >
-                      📍 Gunakan Koordinat Perangkat Ini
-                    </button>
+                  {/* 2. Suhu - Shift (1, 2, 3) */}
+                  <div style={{ background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '10px', border: '1px solid var(--card-border)' }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#f59e0b', marginBottom: '8px' }}>
+                      2. Suhu — Shift (Shift 1, 2, 3)
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                      <div>
+                        <label style={{ fontSize: '0.65rem' }}>Latitude</label>
+                        <input type="number" step="0.000001" className="form-control" style={{ fontSize: '0.75rem', padding: '6px' }}
+                          value={settings.geofenceSuhuShiftLat ?? -4.786256}
+                          onChange={(e) => setSettings({ ...settings, geofenceSuhuShiftLat: parseFloat(e.target.value) })} required />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.65rem' }}>Longitude</label>
+                        <input type="number" step="0.000001" className="form-control" style={{ fontSize: '0.75rem', padding: '6px' }}
+                          value={settings.geofenceSuhuShiftLon ?? 119.614108}
+                          onChange={(e) => setSettings({ ...settings, geofenceSuhuShiftLon: parseFloat(e.target.value) })} required />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.65rem' }}>Radius (M)</label>
+                        <input type="number" className="form-control" style={{ fontSize: '0.75rem', padding: '6px' }}
+                          value={settings.geofenceSuhuShiftRadius ?? 100}
+                          onChange={(e) => setSettings({ ...settings, geofenceSuhuShiftRadius: parseInt(e.target.value, 10) })} required />
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="form-group">
-                    <label>Radius Batas Toleransi (Meter)</label>
-                    <div className="temp-input-wrapper">
-                      <input 
-                        type="number" 
-                        placeholder="100" 
-                        className="form-control"
-                        value={settings.geofenceRadius !== undefined ? settings.geofenceRadius : ''}
-                        onChange={(e) => setSettings({ ...settings, geofenceRadius: parseInt(e.target.value, 10) })}
-                        required
-                      />
-                      <span className="temp-unit">meter</span>
+                  {/* 3. Inspeksi - Shift (1, 2, 3) */}
+                  <div style={{ background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '10px', border: '1px solid var(--card-border)' }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#8b5cf6', marginBottom: '8px' }}>
+                      3. Inspeksi — Shift (Staf Lapangan)
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                      <div>
+                        <label style={{ fontSize: '0.65rem' }}>Latitude</label>
+                        <input type="number" step="0.000001" className="form-control" style={{ fontSize: '0.75rem', padding: '6px' }}
+                          value={settings.geofenceInspeksiShiftLat ?? -4.786256}
+                          onChange={(e) => setSettings({ ...settings, geofenceInspeksiShiftLat: parseFloat(e.target.value) })} required />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.65rem' }}>Longitude</label>
+                        <input type="number" step="0.000001" className="form-control" style={{ fontSize: '0.75rem', padding: '6px' }}
+                          value={settings.geofenceInspeksiShiftLon ?? 119.614108}
+                          onChange={(e) => setSettings({ ...settings, geofenceInspeksiShiftLon: parseFloat(e.target.value) })} required />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.65rem' }}>Radius (M)</label>
+                        <input type="number" className="form-control" style={{ fontSize: '0.75rem', padding: '6px' }}
+                          value={settings.geofenceInspeksiShiftRadius ?? 100}
+                          onChange={(e) => setSettings({ ...settings, geofenceInspeksiShiftRadius: parseInt(e.target.value, 10) })} required />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 4. Analis - Day Shift & Piket */}
+                  <div style={{ background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '10px', border: '1px solid var(--card-border)' }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#06b6d4', marginBottom: '8px' }}>
+                      4. Analis — Day Shift & Piket (Laboratorium)
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                      <div>
+                        <label style={{ fontSize: '0.65rem' }}>Latitude</label>
+                        <input type="number" step="0.000001" className="form-control" style={{ fontSize: '0.75rem', padding: '6px' }}
+                          value={settings.geofenceAnalisDayLat ?? -4.786256}
+                          onChange={(e) => setSettings({ ...settings, geofenceAnalisDayLat: parseFloat(e.target.value) })} required />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.65rem' }}>Longitude</label>
+                        <input type="number" step="0.000001" className="form-control" style={{ fontSize: '0.75rem', padding: '6px' }}
+                          value={settings.geofenceAnalisDayLon ?? 119.614108}
+                          onChange={(e) => setSettings({ ...settings, geofenceAnalisDayLon: parseFloat(e.target.value) })} required />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.65rem' }}>Radius (M)</label>
+                        <input type="number" className="form-control" style={{ fontSize: '0.75rem', padding: '6px' }}
+                          value={settings.geofenceAnalisDayRadius ?? 100}
+                          onChange={(e) => setSettings({ ...settings, geofenceAnalisDayRadius: parseInt(e.target.value, 10) })} required />
+                      </div>
                     </div>
                   </div>
                 </div>
