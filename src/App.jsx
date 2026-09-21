@@ -1810,322 +1810,182 @@ export default function App() {
         {/* ----------------- TAB: SCANNER & OCR (Suhu) ----------------- */}
         {activeTab === 'scan' && isTabVisible('scan') && (
           <div>
-            {!cameraActive && !capturedImage && (
-              <div className="glass-card" style={{ textAlign: 'center', padding: '40px 20px' }}>
-                <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'var(--primary-glow)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', color: 'var(--primary)' }}>
-                  <Camera size={32} />
+            <form onSubmit={handleSubmitReport}>
+              <div className="glass-card">
+                <h3 className="section-title">
+                  <FileText size={16} style={{ color: 'var(--primary)' }} />
+                  Input Laporan Suhu Alat
+                </h3>
+                
+                {/* Temperature Field */}
+                <div className="form-group">
+                  <label>Nilai Suhu Alat (°C) *</label>
+                  <div className="temp-input-wrapper">
+                    <input 
+                      type="number" 
+                      step="0.1" 
+                      placeholder="68.3" 
+                      className="form-control"
+                      value={formTemp}
+                      onChange={(e) => setFormTemp(e.target.value)}
+                      required
+                    />
+                    <span className="temp-unit">°C</span>
+                  </div>
+
+                  {formTemp && (
+                    <div style={{ marginTop: '8px' }}>
+                      <span className={`status-badge ${db.getTemperatureStatus(formTemp, settings).class}`}>
+                        {db.getTemperatureStatus(formTemp, settings).label}
+                      </span>
+                    </div>
+                  )}
                 </div>
-                <h2 style={{ fontSize: '1.2rem', marginBottom: '8px' }}>Pindai Termometer Alat</h2>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '24px' }}>
-                  Arahkan kamera ke layar termometer digital Anda. Sistem akan memindai dan mengekstrak nilai suhu secara otomatis.
-                </p>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <button className="btn btn-primary" onClick={startCamera}>
-                    <Camera size={18} />
-                    Buka Kamera Real-time
-                  </button>
-                  <button className="btn btn-secondary" onClick={() => fileInputRef.current.click()}>
-                    <ImageIcon size={18} />
-                    Unggah Gambar dari Galeri
-                  </button>
-                  <input 
-                    type="file" 
-                    ref={fileInputRef} 
-                    style={{ display: 'none' }} 
-                    accept="image/*" 
-                    onChange={handleFileUpload} 
+
+                {/* Location Field */}
+                <div className="form-group">
+                  <label>Stasiun / Lokasi *</label>
+                  <select 
+                    className="form-control"
+                    value={formLocation}
+                    onChange={(e) => setFormLocation(e.target.value)}
+                    required
+                  >
+                    <option value="" disabled>Pilih Stasiun Pengukuran</option>
+                    {locations.map((loc, idx) => (
+                      <option key={idx} value={loc}>{loc}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Officer Dropdown Selection */}
+                <div className="form-group">
+                  <label>Nama Staff / Petugas</label>
+                  {currentUser.role === 'Operator' ? (
+                    <input 
+                      type="text" 
+                      className="form-control" 
+                      value={currentUser.name} 
+                      disabled 
+                    />
+                  ) : (
+                    <select 
+                      className="form-control"
+                      value={formOfficer}
+                      onChange={(e) => setFormOfficer(e.target.value)}
+                      required
+                    >
+                      {officers.map((name, idx) => (
+                        <option key={idx} value={name}>{name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {/* Notes Field */}
+                <div className="form-group">
+                  <label>Catatan Tambahan (Opsional)</label>
+                  <textarea 
+                    placeholder="Catat kondisi alat jika mengalami keanehan..."
+                    className="form-control"
+                    rows="2"
+                    value={formNotes}
+                    onChange={(e) => setFormNotes(e.target.value)}
+                    style={{ resize: 'none' }}
                   />
                 </div>
               </div>
-            )}
 
-            {cameraActive && (
-              <div className="glass-card" style={{ padding: '12px' }}>
-                <div className="scanner-viewport">
-                  <video ref={videoRef} className="scanner-video" playsInline muted />
-                  <div className="scanner-overlay"></div>
-                  <div className="scanner-target">
-                    <div className="scanner-target-bottom-left"></div>
-                    <div className="scanner-target-bottom-right"></div>
-                  </div>
-                  <div className="scanner-line"></div>
-                  <span className="scanner-tip">Posisikan layar termometer di dalam kotak</span>
-                </div>
-                
-                <div className="upload-btn-container">
-                  <button className="btn btn-secondary" onClick={stopCamera}>
-                    <X size={18} /> Batal
-                  </button>
-                  <button className="btn btn-primary" onClick={capturePhoto}>
-                    <Camera size={18} /> Ambil Foto
-                  </button>
-                </div>
+              <div className="upload-btn-container">
+                <button type="button" className="btn btn-secondary" onClick={() => { setFormTemp(''); setFormNotes(''); }}>
+                  Bersihkan
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  Simpan Laporan
+                </button>
               </div>
-            )}
-
-            {/* OCR Processing Overlay */}
-            {ocrProgress >= 0 && (
-              <div className="glass-card ocr-progress-overlay">
-                <RefreshCw size={36} className="scanning-text" style={{ color: 'var(--primary)', animation: 'spin 2s linear infinite' }} />
-                <span style={{ fontWeight: '600' }} className="scanning-text">{ocrStatusText}</span>
-                <div className="progress-bar-outer">
-                  <div className="progress-bar-inner" style={{ width: `${ocrProgress}%` }}></div>
-                </div>
-              </div>
-            )}
-
-            {/* Form Report Submission */}
-            {capturedImage && ocrProgress === -1 && (
-              <form onSubmit={handleSubmitReport}>
-                <div className="glass-card">
-                  <h3 className="section-title">
-                    <FileText size={16} style={{ color: 'var(--primary)' }} />
-                    Verifikasi Laporan Suhu
-                  </h3>
-                  
-                  <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', alignItems: 'center' }}>
-                    <img src={capturedImage} alt="Crop Preview" style={{ width: '100px', height: '60px', borderRadius: '8px', objectFit: 'cover', border: '1px solid var(--card-border)' }} />
-                    <div>
-                      <div style={{ fontSize: '0.8rem', fontWeight: '600' }}>Foto Terpotong</div>
-                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Bagian layar termometer terdeteksi</div>
-                      <button type="button" className="btn btn-secondary" onClick={startCamera} style={{ padding: '4px 8px', fontSize: '0.65rem', height: 'auto', marginTop: '6px', borderRadius: '6px' }}>
-                        <RefreshCw size={10} /> Foto Ulang
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Temperature Field - CLEAR MANUAL EDIT WARNING */}
-                  <div className="form-group">
-                    <label>Suhu Alat Terdeteksi</label>
-                    <div className="temp-input-wrapper">
-                      <input 
-                        type="number" 
-                        step="0.1" 
-                        placeholder="68.3" 
-                        className="form-control"
-                        value={formTemp}
-                        onChange={(e) => setFormTemp(e.target.value)}
-                        required
-                      />
-                      <span className="temp-unit">°C</span>
-                    </div>
-                    
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', display: 'block', marginTop: '4px' }}>
-                      💡 *Hasil Pindai di atas masih bisa diedit secara manual jika angka kurang sesuai.*
-                    </span>
-
-                    {formTemp && (
-                      <div style={{ marginTop: '8px' }}>
-                        <span className={`status-badge ${db.getTemperatureStatus(formTemp, settings).class}`}>
-                          {db.getTemperatureStatus(formTemp, settings).label}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Location Field */}
-                  <div className="form-group">
-                    <label>Stasiun / Lokasi</label>
-                    <select 
-                      className="form-control"
-                      value={formLocation}
-                      onChange={(e) => setFormLocation(e.target.value)}
-                      required
-                    >
-                      <option value="" disabled>Pilih Stasiun Pengukuran</option>
-                      {locations.map((loc, idx) => (
-                        <option key={idx} value={loc}>{loc}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Officer Dropdown Selection - Locked for Operator */}
-                  <div className="form-group">
-                    <label>Nama Staff / Petugas</label>
-                    {currentUser.role === 'Operator' ? (
-                      <input 
-                        type="text" 
-                        className="form-control" 
-                        value={currentUser.name} 
-                        disabled 
-                      />
-                    ) : (
-                      <select 
-                        className="form-control"
-                        value={formOfficer}
-                        onChange={(e) => setFormOfficer(e.target.value)}
-                        required
-                      >
-                        {officers.map((name, idx) => (
-                          <option key={idx} value={name}>{name}</option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-
-                  {/* Notes Field */}
-                  <div className="form-group">
-                    <label>Catatan Tambahan (Opsional)</label>
-                    <textarea 
-                      placeholder="Catat kondisi alat jika mengalami keanehan..."
-                      className="form-control"
-                      rows="2"
-                      value={formNotes}
-                      onChange={(e) => setFormNotes(e.target.value)}
-                      style={{ resize: 'none' }}
-                    />
-                  </div>
-                </div>
-
-                <div className="upload-btn-container">
-                  <button type="button" className="btn btn-secondary" onClick={() => { setCapturedImage(null); setFormTemp(''); }}>
-                    Hapus
-                  </button>
-                  <button type="submit" className="btn btn-primary">
-                    Simpan Laporan
-                  </button>
-                </div>
-              </form>
-            )}
+            </form>
           </div>
         )}
 
         {/* ----------------- TAB: ACTIVITY (Kegiatan Inspeksi/Analis) ----------------- */}
         {activeTab === 'activity' && isTabVisible('activity') && (
           <div>
-            {!actCameraActive && !actImage && (
-              <div className="glass-card" style={{ textAlign: 'center', padding: '40px 20px' }}>
-                <div style={{ width: '64px', height: '64px', borderRadius: '50%', background: 'var(--primary-glow)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', color: 'var(--primary)' }}>
-                  <Camera size={32} />
+            <form onSubmit={handleSubmitActivity}>
+              <div className="glass-card">
+                <h3 className="section-title">
+                  <ClipboardList size={16} style={{ color: 'var(--primary)' }} />
+                  Laporan Kegiatan {(currentUser.jobdesk || 'inspeksi') === 'inspeksi' ? 'Inspeksi' : 'Analis'}
+                </h3>
+
+                <div className="form-group">
+                  <label>Keterangan Kegiatan *</label>
+                  <textarea 
+                    placeholder="Jelaskan kegiatan yang sedang dilakukan..."
+                    className="form-control"
+                    rows="3"
+                    value={actFormDescription}
+                    onChange={(e) => setActFormDescription(e.target.value)}
+                    style={{ resize: 'none' }}
+                    required
+                  />
                 </div>
-                <h2 style={{ fontSize: '1.2rem', marginBottom: '8px' }}>Dokumentasi Kegiatan {(currentUser.jobdesk || 'inspeksi') === 'inspeksi' ? 'Inspeksi' : 'Analis'}</h2>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '24px' }}>
-                  Ambil foto kegiatan Anda di lapangan, lalu isi keterangan dan lokasi.
-                </p>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <button className="btn btn-primary" onClick={startActCamera}>
-                    <Camera size={18} />
-                    Buka Kamera
-                  </button>
-                  <button className="btn btn-secondary" onClick={() => actFileInputRef.current.click()}>
-                    <ImageIcon size={18} />
-                    Unggah dari Galeri
-                  </button>
-                  <input 
-                    type="file" 
-                    ref={actFileInputRef} 
-                    style={{ display: 'none' }} 
-                    accept="image/*" 
-                    onChange={handleActFileUpload} 
+
+                <div className="form-group">
+                  <label>Lokasi *</label>
+                  <select 
+                    className="form-control"
+                    value={actFormLocation}
+                    onChange={(e) => setActFormLocation(e.target.value)}
+                    required
+                  >
+                    <option value="" disabled>Pilih Lokasi</option>
+                    {actLocations.map((loc, idx) => (
+                      <option key={idx} value={loc}>{loc}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label>Nama Staff / Petugas</label>
+                  {currentUser.role === 'Operator' ? (
+                    <input type="text" className="form-control" value={currentUser.name} disabled />
+                  ) : (
+                    <select 
+                      className="form-control"
+                      value={actFormOfficer}
+                      onChange={(e) => setActFormOfficer(e.target.value)}
+                      required
+                    >
+                      {officers.map((name, idx) => (
+                        <option key={idx} value={name}>{name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                <div className="form-group">
+                  <label>Catatan Tambahan (Opsional)</label>
+                  <textarea 
+                    placeholder="Catatan tambahan jika ada..."
+                    className="form-control"
+                    rows="2"
+                    value={actFormNotes}
+                    onChange={(e) => setActFormNotes(e.target.value)}
+                    style={{ resize: 'none' }}
                   />
                 </div>
               </div>
-            )}
 
-            {actCameraActive && (
-              <div className="glass-card" style={{ padding: '12px' }}>
-                <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', background: '#000', aspectRatio: '4/3' }}>
-                  <video ref={actVideoRef} style={{ width: '100%', height: '100%', objectFit: 'cover' }} playsInline muted />
-                </div>
-                <div className="upload-btn-container">
-                  <button className="btn btn-secondary" onClick={stopActCamera}>
-                    <X size={18} /> Batal
-                  </button>
-                  <button className="btn btn-primary" onClick={captureActPhoto}>
-                    <Camera size={18} /> Ambil Foto
-                  </button>
-                </div>
+              <div className="upload-btn-container">
+                <button type="button" className="btn btn-secondary" onClick={() => { setActFormDescription(''); setActFormNotes(''); }}>
+                  Bersihkan
+                </button>
+                <button type="submit" className="btn btn-primary">
+                  Simpan Laporan
+                </button>
               </div>
-            )}
-
-            {actImage && (
-              <form onSubmit={handleSubmitActivity}>
-                <div className="glass-card">
-                  <h3 className="section-title">
-                    <ClipboardList size={16} style={{ color: 'var(--primary)' }} />
-                    Laporan Kegiatan {(currentUser.jobdesk || 'inspeksi') === 'inspeksi' ? 'Inspeksi' : 'Analis'}
-                  </h3>
-                  
-                  <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', alignItems: 'center' }}>
-                    <img src={actImage} alt="Activity Preview" style={{ width: '100px', height: '75px', borderRadius: '8px', objectFit: 'cover', border: '1px solid var(--card-border)' }} />
-                    <div>
-                      <div style={{ fontSize: '0.8rem', fontWeight: '600' }}>Foto Kegiatan</div>
-                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Dokumentasi aktivitas lapangan</div>
-                      <button type="button" className="btn btn-secondary" onClick={startActCamera} style={{ padding: '4px 8px', fontSize: '0.65rem', height: 'auto', marginTop: '6px', borderRadius: '6px' }}>
-                        <RefreshCw size={10} /> Foto Ulang
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="form-group">
-                    <label>Keterangan Kegiatan *</label>
-                    <textarea 
-                      placeholder="Jelaskan kegiatan yang sedang dilakukan..."
-                      className="form-control"
-                      rows="3"
-                      value={actFormDescription}
-                      onChange={(e) => setActFormDescription(e.target.value)}
-                      style={{ resize: 'none' }}
-                      required
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label>Lokasi</label>
-                    <select 
-                      className="form-control"
-                      value={actFormLocation}
-                      onChange={(e) => setActFormLocation(e.target.value)}
-                      required
-                    >
-                      <option value="" disabled>Pilih Lokasi</option>
-                      {actLocations.map((loc, idx) => (
-                        <option key={idx} value={loc}>{loc}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="form-group">
-                    <label>Nama Staff / Petugas</label>
-                    {currentUser.role === 'Operator' ? (
-                      <input type="text" className="form-control" value={currentUser.name} disabled />
-                    ) : (
-                      <select 
-                        className="form-control"
-                        value={actFormOfficer}
-                        onChange={(e) => setActFormOfficer(e.target.value)}
-                        required
-                      >
-                        {officers.map((name, idx) => (
-                          <option key={idx} value={name}>{name}</option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-
-                  <div className="form-group">
-                    <label>Catatan Tambahan (Opsional)</label>
-                    <textarea 
-                      placeholder="Catatan tambahan jika ada..."
-                      className="form-control"
-                      rows="2"
-                      value={actFormNotes}
-                      onChange={(e) => setActFormNotes(e.target.value)}
-                      style={{ resize: 'none' }}
-                    />
-                  </div>
-                </div>
-
-                <div className="upload-btn-container">
-                  <button type="button" className="btn btn-secondary" onClick={() => { setActImage(null); setActFormDescription(''); setActFormNotes(''); }}>
-                    Hapus
-                  </button>
-                  <button type="submit" className="btn btn-primary">
-                    Simpan Laporan
-                  </button>
-                </div>
-              </form>
-            )}
+            </form>
           </div>
         )}
 
@@ -2310,147 +2170,83 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Selfie Camera Capture */}
-                <div className="form-group">
-                  <label>
-                    {['Check In', 'Check Out'].includes(attType) 
-                      ? 'Foto Wajah Petugas (Selfie) *' 
-                      : 'Foto Surat Keterangan / Bukti Eviden *'}
-                  </label>
-                  
-                  {!attCameraActive && !attImage && (
-                    <div style={{ border: '2px dashed var(--card-border)', borderRadius: '12px', padding: '24px', textAlign: 'center', background: 'rgba(255,255,255,0.01)' }}>
-                      <User size={36} style={{ color: 'var(--text-muted)', marginBottom: '8px' }} />
-                      <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '14px' }}>
-                        {['Check In', 'Check Out'].includes(attType)
-                          ? 'Ambil foto selfie di lokasi stasiun kerja saat Check In / Out.'
-                          : 'Ambil atau unggah foto surat keterangan dokter/bukti izin.'}
-                      </p>
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        <button type="button" className="btn btn-secondary" onClick={startAttCamera} style={{ fontSize: '0.75rem', padding: '8px 12px' }}>
-                          <Camera size={14} /> Buka Kamera Depan
-                        </button>
-                        <button type="button" className="btn btn-secondary" onClick={() => attFileInputRef.current.click()} style={{ fontSize: '0.75rem', padding: '8px 12px' }}>
-                          <ImageIcon size={14} /> Galeri
-                        </button>
-                        <input 
-                          type="file" 
-                          ref={attFileInputRef} 
-                          style={{ display: 'none' }} 
-                          accept="image/*" 
-                          capture="user"
-                          onChange={handleAttFileUpload} 
-                        />
-                      </div>
+                {/* GPS Status Location Lock */}
+                <div className="form-group" style={{ background: 'var(--bg-tertiary)', padding: '12px', borderRadius: '12px', border: '1px solid var(--card-border)', marginTop: '16px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>KOORDINAT LOKASI (GPS)</span>
+                    <button type="button" className="btn btn-secondary" onClick={lockGeolocation} style={{ padding: '2px 8px', fontSize: '0.65rem', height: 'auto', borderRadius: '6px' }} disabled={attGpsLoading}>
+                      <RefreshCw size={10} /> Lock Ulang
+                    </button>
+                  </div>
+
+                  {attGpsLoading && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      <RefreshCw size={12} style={{ animation: 'spin 1.5s linear infinite' }} />
+                      <span>Mendapatkan sinyal satelit GPS...</span>
                     </div>
                   )}
 
-                  {attCameraActive && (
-                    <div style={{ position: 'relative', width: '100%', height: '220px', borderRadius: '12px', overflow: 'hidden', background: '#000', border: '1px solid var(--card-border)' }}>
-                      <video ref={attVideoRef} style={{ width: '100%', height: '100%', objectFit: 'cover' }} playsInline muted />
-                      <button 
-                        type="button" 
-                        className="btn btn-primary" 
-                        onClick={captureAttPhoto}
-                        style={{ position: 'absolute', bottom: '10px', left: '50%', transform: 'translateX(-50%)', padding: '8px 16px', fontSize: '0.75rem', background: '#10b981' }}
-                      >
-                        <Camera size={14} /> Ambil Foto
-                      </button>
-                    </div>
-                  )}
+                  {!attGpsLoading && attGpsData && (
+                    <div style={{ marginTop: '6px' }}>
+                      {attGpsData.latitude ? (
+                        <div>
+                          <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#10b981' }}>GPS Terkunci Secara Akurat</div>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            Lintang: {attGpsData.latitude.toFixed(6)}, Bujur: {attGpsData.longitude.toFixed(6)}
+                          </div>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                            Radius Akurasi: ±{attGpsData.accuracy} meter
+                          </div>
 
-                  {attImage && (
-                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                      <img src={attImage} alt="Selfie preview" style={{ width: '80px', height: '80px', borderRadius: '10px', objectFit: 'cover', border: '2px solid var(--card-border)' }} />
-                      <div>
-                        <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Foto Terlampir</div>
-                        <button type="button" className="btn btn-secondary" onClick={startAttCamera} style={{ padding: '4px 8px', fontSize: '0.65rem', height: 'auto', marginTop: '4px', borderRadius: '6px' }}>
-                          <RefreshCw size={10} /> Foto Ulang
-                        </button>
-                      </div>
+                          {/* Fake GPS Alert indicator */}
+                          {attGpsData.isFakeGps && (
+                            <div className="alert-card warning" style={{ display: 'flex', gap: '6px', alignItems: 'center', padding: '6px 10px', marginTop: '8px', marginBottom: 0 }}>
+                              <ShieldAlert size={14} style={{ flex: 'none' }} />
+                              <span>Terdeteksi kemungkinan manipulasi Fake GPS (Lokasi Tiruan)!</span>
+                            </div>
+                          )}
+
+                          {/* Geofence Distance Indicator */}
+                          {(() => {
+                            if (settings.enableGeofence && ['Check In', 'Check Out'].includes(attType)) {
+                              const dist = calculateDistance(
+                                attGpsData.latitude,
+                                attGpsData.longitude,
+                                settings.geofenceLat,
+                                settings.geofenceLon
+                              );
+                              if (dist !== null) {
+                                const isWithin = dist <= settings.geofenceRadius;
+                                return (
+                                  <div style={{ 
+                                    marginTop: '8px', 
+                                    padding: '8px 12px', 
+                                    borderRadius: '8px', 
+                                    background: isWithin ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', 
+                                    border: isWithin ? '1px solid rgba(16,185,129,0.2)' : '1px solid rgba(239,68,68,0.2)', 
+                                    fontSize: '0.75rem' 
+                                  }}>
+                                    <div style={{ fontWeight: 'bold', color: isWithin ? '#10b981' : '#ef4444' }}>
+                                      {isWithin ? '🟢 Anda berada di dalam area absensi' : '🔴 Anda berada di luar area absensi'}
+                                    </div>
+                                    <div style={{ color: 'var(--text-secondary)', marginTop: '2px' }}>
+                                      Jarak ke kantor: <strong>{dist.toFixed(1)} meter</strong> (Batas Maksimal: {settings.geofenceRadius} meter)
+                                    </div>
+                                  </div>
+                                );
+                              }
+                            }
+                            return null;
+                          })()}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--danger)', fontWeight: '500', marginTop: '4px' }}>
+                          Gagal mengunci lokasi. Pastikan GPS HP aktif.
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-
-                {/* GPS Status Location Lock */}
-                {attImage && (
-                  <div className="form-group" style={{ background: 'var(--bg-tertiary)', padding: '12px', borderRadius: '12px', border: '1px solid var(--card-border)' }}>
-                    <div style={{ display: 'flex', justifycontent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '0.7rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>KOORDINAT LOKASI (GPS)</span>
-                      <button type="button" className="btn btn-secondary" onClick={lockGeolocation} style={{ padding: '2px 8px', fontSize: '0.65rem', height: 'auto', borderRadius: '6px' }} disabled={attGpsLoading}>
-                        <RefreshCw size={10} /> Lock Ulang
-                      </button>
-                    </div>
-
-                    {attGpsLoading && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                        <RefreshCw size={12} style={{ animation: 'spin 1.5s linear infinite' }} />
-                        <span>Mendapatkan sinyal satelit GPS...</span>
-                      </div>
-                    )}
-
-                    {!attGpsLoading && attGpsData && (
-                      <div style={{ marginTop: '6px' }}>
-                        {attGpsData.latitude ? (
-                          <div>
-                            <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#10b981' }}>GPS Terkunci Secara Akurat</div>
-                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                              Lintang: {attGpsData.latitude.toFixed(6)}, Bujur: {attGpsData.longitude.toFixed(6)}
-                            </div>
-                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                              Radius Akurasi: ±{attGpsData.accuracy} meter
-                            </div>
-
-                            {/* Fake GPS Alert indicator */}
-                            {attGpsData.isFakeGps && (
-                              <div className="alert-card warning" style={{ display: 'flex', gap: '6px', alignItems: 'center', padding: '6px 10px', marginTop: '8px', marginBottom: 0 }}>
-                                <ShieldAlert size={14} style={{ flex: 'none' }} />
-                                <span>Terdeteksi kemungkinan manipulasi Fake GPS (Lokasi Tiruan)!</span>
-                              </div>
-                            )}
-
-                            {/* Geofence Distance Indicator */}
-                            {(() => {
-                              if (settings.enableGeofence && ['Check In', 'Check Out'].includes(attType)) {
-                                const dist = calculateDistance(
-                                  attGpsData.latitude,
-                                  attGpsData.longitude,
-                                  settings.geofenceLat,
-                                  settings.geofenceLon
-                                );
-                                if (dist !== null) {
-                                  const isWithin = dist <= settings.geofenceRadius;
-                                  return (
-                                    <div style={{ 
-                                      marginTop: '8px', 
-                                      padding: '8px 12px', 
-                                      borderRadius: '8px', 
-                                      background: isWithin ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', 
-                                      border: isWithin ? '1px solid rgba(16,185,129,0.2)' : '1px solid rgba(239,68,68,0.2)', 
-                                      fontSize: '0.75rem' 
-                                    }}>
-                                      <div style={{ fontWeight: 'bold', color: isWithin ? '#10b981' : '#ef4444' }}>
-                                        {isWithin ? '🟢 Anda berada di dalam area absensi' : '🔴 Anda berada di luar area absensi'}
-                                      </div>
-                                      <div style={{ color: 'var(--text-secondary)', marginTop: '2px' }}>
-                                        Jarak ke kantor: <strong>{dist.toFixed(1)} meter</strong> (Batas Maksimal: {settings.geofenceRadius} meter)
-                                      </div>
-                                    </div>
-                                  );
-                                }
-                              }
-                              return null;
-                            })()}
-                          </div>
-                        ) : (
-                          <div style={{ fontSize: '0.75rem', color: 'var(--danger)', fontWeight: '500', marginTop: '4px' }}>
-                            Gagal mengunci lokasi. Pastikan GPS HP aktif.
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
 
                 {/* Notes/Keterangan Field for Sakit/Izin/Cuti */}
                 {!['Check In', 'Check Out'].includes(attType) && (
