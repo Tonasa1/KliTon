@@ -890,9 +890,24 @@ export const db = {
 
   // --- CLOUD SYNC CONFIG (SUPABASE) ---
   getSupabaseConfig() {
+    const DEFAULT_URL = 'https://xevvfgbzmybyehlaiisx.supabase.co';
+    const DEFAULT_KEY = 'sb_publishable_nhgq0NRhvniCXK5ETG22-w_OspHUO2q';
+
+    let storedUrl = localStorage.getItem('thermascan_supabase_url');
+    let storedKey = localStorage.getItem('thermascan_supabase_key');
+
+    if (!storedUrl || !storedUrl.includes('xevvfgbzmybyehlaiisx')) {
+      storedUrl = DEFAULT_URL;
+      localStorage.setItem('thermascan_supabase_url', DEFAULT_URL);
+    }
+    if (!storedKey || storedKey.length < 20) {
+      storedKey = DEFAULT_KEY;
+      localStorage.setItem('thermascan_supabase_key', DEFAULT_KEY);
+    }
+
     return {
-      url: localStorage.getItem('thermascan_supabase_url') || 'https://xevvfgbzmybyehlaiisx.supabase.co',
-      key: localStorage.getItem('thermascan_supabase_key') || 'sb_publishable_nhgq0NRhvniCXK5ETG22-w_OspHUO2q'
+      url: storedUrl,
+      key: storedKey
     };
   },
 
@@ -932,7 +947,19 @@ export const db = {
 
       // 1. Fetch from Supabase
       const reportsRes = await fetch(`${url}/rest/v1/reports?select=*`, { headers });
-      const cloudReports = reportsRes.ok ? await reportsRes.json() : [];
+      let cloudReports = reportsRes.ok ? await reportsRes.json() : [];
+      cloudReports = cloudReports.map(r => ({
+        id: r.id,
+        timestamp: r.timestamp,
+        officer: r.officer,
+        location: r.location,
+        equipmentName: r.equipment_name || r.equipmentName || '',
+        temperature: r.temperature,
+        notes: r.notes || '',
+        image: r.image || '',
+        status: r.status || 'Normal',
+        jobdesk: r.jobdesk || 'suhu'
+      }));
 
       const attRes = await fetch(`${url}/rest/v1/attendance?select=*`, { headers });
       let cloudAtt = attRes.ok ? await attRes.json() : [];
@@ -986,10 +1013,22 @@ export const db = {
       const reportsToUpload = localReports.filter(r => !cloudReportIds.has(r.id));
       
       for (const r of reportsToUpload) {
+        const mapped = {
+          id: r.id,
+          timestamp: r.timestamp,
+          officer: r.officer,
+          location: r.location,
+          equipment_name: r.equipmentName || r.equipment_name || '',
+          temperature: r.temperature,
+          notes: r.notes || null,
+          image: r.image || null,
+          status: r.status || 'Normal',
+          jobdesk: r.jobdesk || 'suhu'
+        };
         await fetch(`${url}/rest/v1/reports`, {
           method: 'POST',
-          headers,
-          body: JSON.stringify(r)
+          headers: { ...headers, 'Prefer': 'resolution=merge-duplicates' },
+          body: JSON.stringify(mapped)
         });
       }
 
@@ -1149,10 +1188,22 @@ export const db = {
         'Content-Type': 'application/json',
         'Prefer': 'resolution=merge-duplicates'
       };
+      const mapped = {
+        id: report.id,
+        timestamp: report.timestamp,
+        officer: report.officer,
+        location: report.location,
+        equipment_name: report.equipmentName || report.equipment_name || '',
+        temperature: report.temperature,
+        notes: report.notes || null,
+        image: report.image || null,
+        status: report.status || 'Normal',
+        jobdesk: report.jobdesk || 'suhu'
+      };
       await fetch(`${url}/rest/v1/reports`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(report)
+        body: JSON.stringify(mapped)
       });
     } catch (e) {
       console.error("Failed to upload report to cloud:", e);
