@@ -321,6 +321,7 @@ export default function App() {
           setReports(res.reports);
           setAttendance(res.attendance);
           if (res.activities) setActivities(res.activities);
+          if (res.handovers) setHandovers(res.handovers);
           setUsers(db.getUsers());
           showToast("Data tersinkronisasi otomatis dengan Cloud DB.", "success");
         }
@@ -1504,14 +1505,12 @@ export default function App() {
   const handleAddLocation = (e) => {
     e.preventDefault();
     if (newLocationName.trim()) {
-      const success = db.saveLocationByJobdesk(settingManageJobdesk, newLocationName);
+      const success = db.saveLocation(newLocationName);
       if (success) {
-        setSettingLocations(db.getLocationsByJobdesk(settingManageJobdesk));
-        if (settingManageJobdesk === 'suhu') {
-          setLocations(db.getLocationsByJobdesk('suhu'));
-        } else {
-          setActLocations(db.getLocationsByJobdesk(settingManageJobdesk));
-        }
+        const updated = db.getLocations();
+        setSettingLocations(updated);
+        setLocations(updated);
+        setActLocations(updated);
         setNewLocationName('');
         setShowLocationInput(false);
         showToast("Lokasi baru ditambahkan!", "success");
@@ -1526,13 +1525,11 @@ export default function App() {
       showToast("Minimal harus menyisakan 1 lokasi.", "error");
       return;
     }
-    db.deleteLocationByJobdesk(settingManageJobdesk, loc);
-    setSettingLocations(db.getLocationsByJobdesk(settingManageJobdesk));
-    if (settingManageJobdesk === 'suhu') {
-      setLocations(db.getLocationsByJobdesk('suhu'));
-    } else {
-      setActLocations(db.getLocationsByJobdesk(settingManageJobdesk));
-    }
+    db.deleteLocation(loc);
+    const updated = db.getLocations();
+    setSettingLocations(updated);
+    setLocations(updated);
+    setActLocations(updated);
     showToast("Lokasi berhasil dihapus.", "success");
   };
 
@@ -2091,6 +2088,7 @@ export default function App() {
                         setReports(res.reports);
                         setAttendance(res.attendance);
                         if (res.activities) setActivities(res.activities);
+                        if (res.handovers) setHandovers(res.handovers);
                         setUsers(db.getUsers());
                         showToast('Data berhasil diperbarui dari Cloud!', 'success');
                       }
@@ -3800,33 +3798,6 @@ export default function App() {
                 )}
               </div>
 
-              {/* Selector for which jobdesk to manage */}
-              <div className="form-group" style={{ marginBottom: '14px' }}>
-                <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>PILIH JOBDESK UNTUK DIKELOLA</label>
-                <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
-                  {['suhu', 'inspeksi', 'analis'].map(jd => (
-                    <button
-                      key={jd}
-                      type="button"
-                      className="btn"
-                      onClick={() => setSettingManageJobdesk(jd)}
-                      style={{
-                        flex: 1,
-                        padding: '6px 8px',
-                        fontSize: '0.7rem',
-                        borderRadius: '6px',
-                        background: settingManageJobdesk === jd ? 'var(--primary)' : 'var(--bg-tertiary)',
-                        color: settingManageJobdesk === jd ? '#fff' : 'var(--text-muted)',
-                        border: 'none',
-                        transition: 'all 0.2s ease'
-                      }}
-                    >
-                      {jd.charAt(0).toUpperCase() + jd.slice(1)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
               {showLocationInput && (
                 <form onSubmit={handleAddLocation} style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
                   <input 
@@ -3873,34 +3844,8 @@ export default function App() {
                 Atur koordinat lintang/bujur dan radius pagar virtual (geofence) untuk masing-masing stasiun kerja secara individual.
               </p>
 
-              {/* Selector Jobdesk */}
-              <div className="form-group" style={{ marginBottom: '14px' }}>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  {['suhu', 'inspeksi', 'analis'].map(jd => (
-                    <button
-                      key={jd}
-                      type="button"
-                      className="btn"
-                      onClick={() => setSettingManageJobdesk(jd)}
-                      style={{
-                        flex: 1,
-                        padding: '6px 8px',
-                        fontSize: '0.7rem',
-                        borderRadius: '6px',
-                        background: settingManageJobdesk === jd ? '#10b981' : 'var(--bg-tertiary)',
-                        color: settingManageJobdesk === jd ? '#fff' : 'var(--text-muted)',
-                        border: 'none',
-                        transition: 'all 0.2s ease'
-                      }}
-                    >
-                      {jd.charAt(0).toUpperCase() + jd.slice(1)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '420px', overflowY: 'auto', paddingRight: '4px' }}>
-                {db.getLocationsByJobdesk(settingManageJobdesk).filter(loc => loc !== 'Lainnya...').map((loc, idx) => {
+                {db.getLocations().filter(loc => loc !== 'Lainnya...').map((loc, idx) => {
                   const coord = stationCoords[loc] || { lat: -4.786256, lon: 119.614108, radius: 100 };
                   return (
                     <div key={idx} style={{ background: 'rgba(255,255,255,0.02)', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--card-border)' }}>
