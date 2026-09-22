@@ -3976,7 +3976,12 @@ CREATE TABLE IF NOT EXISTS attendance (
     latitude FLOAT8,
     longitude FLOAT8,
     gps_accuracy FLOAT8,
-    is_fake_gps BOOLEAN
+    is_fake_gps BOOLEAN,
+    jobdesk TEXT,
+    notes TEXT,
+    status TEXT,
+    spv_approval JSONB,
+    manager_approval JSONB
 );
 
 -- 3. Buat tabel activities
@@ -3991,10 +3996,48 @@ CREATE TABLE IF NOT EXISTS activities (
     image TEXT
 );
 
--- 4. Nonaktifkan RLS (agar mudah diakses frontend)
+-- 4. Buat tabel handovers
+CREATE TABLE IF NOT EXISTS handovers (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    jobdesk TEXT NOT NULL,
+    shift_from TEXT,
+    shift_to TEXT,
+    sender_name TEXT NOT NULL,
+    sender_station TEXT,
+    sender_lat REAL,
+    sender_lon REAL,
+    sent_at TIMESTAMPTZ,
+    summary TEXT,
+    issues TEXT,
+    notes TEXT,
+    receiver_name TEXT,
+    receiver_station TEXT,
+    receiver_lat REAL,
+    receiver_lon REAL,
+    received_at TIMESTAMPTZ,
+    piket_date TEXT,
+    piket_checklist JSONB,
+    sender_from TEXT,
+    status TEXT DEFAULT 'pending',
+    notified_spv BOOLEAN DEFAULT FALSE,
+    notified_manager BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 5. Buat tabel settings
+CREATE TABLE IF NOT EXISTS settings (
+    id TEXT PRIMARY KEY,
+    data JSONB NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 6. Nonaktifkan RLS
 ALTER TABLE reports DISABLE ROW LEVEL SECURITY;
 ALTER TABLE attendance DISABLE ROW LEVEL SECURITY;
-ALTER TABLE activities DISABLE ROW LEVEL SECURITY;`}
+ALTER TABLE activities DISABLE ROW LEVEL SECURITY;
+ALTER TABLE handovers DISABLE ROW LEVEL SECURITY;
+ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
                 />
               </div>
             </div>
