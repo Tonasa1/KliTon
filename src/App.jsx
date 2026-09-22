@@ -1745,7 +1745,10 @@ export default function App() {
     let abnormalCount = 0;
     
     if (total > 0) {
-      maxT = `${Math.max(...todayReports.map(r => r.temperature)).toFixed(1)}°C`;
+      const validTemps = todayReports.map(r => Number(r.temperature)).filter(t => !isNaN(t));
+      if (validTemps.length > 0) {
+        maxT = `${Math.max(...validTemps).toFixed(1)}°C`;
+      }
       abnormalCount = todayReports.filter(r => {
         const statusObj = db.getTemperatureStatus(r.temperature, settings);
         return statusObj.label !== 'NORMAL';
@@ -1787,6 +1790,7 @@ export default function App() {
     });
 
     const chartData = [...visibleReports]
+      .filter(r => r.temperature !== null && r.temperature !== undefined && !isNaN(Number(r.temperature)))
       .slice(0, 7)
       .reverse();
       
@@ -1806,21 +1810,22 @@ export default function App() {
     const paddingX = 40;
     const paddingY = 25;
     
-    const temps = chartData.map(r => r.temperature);
+    const temps = chartData.map(r => Number(r.temperature) || 0);
     const minTemp = Math.floor(Math.min(...temps)) - 5;
-    const maxTemp = Math.ceil(Math.max(...temps, settings.highTempAlert)) + 5;
-    const tempRange = maxTemp - minTemp;
+    const maxTemp = Math.ceil(Math.max(...temps, settings.highTempAlert || 60)) + 5;
+    const tempRange = (maxTemp - minTemp) || 1;
 
     const points = chartData.map((d, index) => {
-      const x = paddingX + (index * (width - paddingX * 2) / (chartData.length - 1));
-      const y = height - paddingY - ((d.temperature - minTemp) * (height - paddingY * 2) / tempRange);
-      return { x, y, temp: d.temperature, time: new Date(d.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) };
+      const numTemp = Number(d.temperature) || 0;
+      const x = paddingX + (index * (width - paddingX * 2) / (chartData.length - 1 || 1));
+      const y = height - paddingY - ((numTemp - minTemp) * (height - paddingY * 2) / tempRange);
+      return { x, y, temp: numTemp, time: new Date(d.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) };
     });
 
     const pathData = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
     const areaData = `${pathData} L ${points[points.length - 1].x} ${height - paddingY} L ${points[0].x} ${height - paddingY} Z`;
 
-    const warningY = height - paddingY - ((settings.highTempAlert - minTemp) * (height - paddingY * 2) / tempRange);
+    const warningY = height - paddingY - (((settings.highTempAlert || 60) - minTemp) * (height - paddingY * 2) / tempRange);
 
     return (
       <div style={{ position: 'relative' }}>
@@ -1860,7 +1865,7 @@ export default function App() {
               <g key={i}>
                 <circle cx={p.x} cy={p.y} r="5" className="chart-dot" />
                 <text x={p.x} y={p.y - 10} textAnchor="middle" fill="var(--text-primary)" fontSize="9" fontWeight="bold" fontFamily="var(--font-heading)">
-                  {p.temp.toFixed(1)}°
+                  {(Number(p.temp) || 0).toFixed(1)}°
                 </text>
                 <text x={p.x} y={height - 8} textAnchor="middle" className="chart-axis-text">
                   {p.time}
@@ -1869,7 +1874,7 @@ export default function App() {
             ))}
             
             <text x={paddingX - 10} y={paddingY + 3} textAnchor="end" className="chart-axis-text">{maxTemp}°</text>
-            <text x={paddingX - 10} y={(height - paddingY + paddingY)/2 + 3} textAnchor="end" className="chart-axis-text">{((maxTemp+minTemp)/2).toFixed(0)}°</text>
+            <text x={paddingX - 10} y={(height - paddingY + paddingY)/2 + 3} textAnchor="end" className="chart-axis-text">{(((maxTemp+minTemp)/2) || 0).toFixed(0)}°</text>
             <text x={paddingX - 10} y={height - paddingY + 3} textAnchor="end" className="chart-axis-text">{minTemp}°</text>
           </svg>
         </div>
@@ -3282,7 +3287,7 @@ export default function App() {
                           </div>
                           <div className="report-value-area">
                             <span className="report-temp" style={{ color: status.color }}>
-                              {r.temperature.toFixed(1)}°C
+                              {(Number(r.temperature) || 0).toFixed(1)}°C
                             </span>
                             <span className={`status-badge ${status.class}`} style={{ fontSize: '0.5rem', padding: '1px 5px' }}>
                               {status.label.split(' ')[0]}
@@ -4188,7 +4193,7 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
                 <div className="glass-card" style={{ padding: '12px', marginBottom: 0 }}>
                   <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>SUHU ALAT</span>
                   <span style={{ fontSize: '1.5rem', fontWeight: 'bold', fontFamily: 'var(--font-heading)', color: db.getTemperatureStatus(selectedReport.temperature, settings).color }}>
-                    {selectedReport.temperature.toFixed(1)}°C
+                    {(Number(selectedReport.temperature) || 0).toFixed(1)}°C
                   </span>
                 </div>
                 <div className="glass-card" style={{ padding: '12px', marginBottom: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
