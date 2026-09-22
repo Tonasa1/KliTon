@@ -66,18 +66,10 @@ const DEFAULT_LOCATIONS = [
   'Dome T5',
   'Gudang BKS',
   'Hopper',
-  'Lainnya...'
-];
-
-const DEFAULT_INSPEKSI_LOCATIONS = [
   'Area Produksi',
   'Gudang Bahan Baku',
   'Ruang Kontrol',
   'Area Conveyor',
-  'Lainnya...'
-];
-
-const DEFAULT_ANALIS_LOCATIONS = [
   'Laboratorium Utama',
   'Lab Kimia',
   'Lab Fisika',
@@ -592,50 +584,15 @@ export const db = {
 
   // --- LOCATIONS PER JOBDESK ---
   getLocationsByJobdesk(jobdesk) {
-    if (jobdesk === 'inspeksi') {
-      try {
-        const data = localStorage.getItem(INSPEKSI_LOCATIONS_KEY);
-        return data ? JSON.parse(data) : DEFAULT_INSPEKSI_LOCATIONS;
-      } catch (e) {
-        return DEFAULT_INSPEKSI_LOCATIONS;
-      }
-    } else if (jobdesk === 'analis') {
-      try {
-        const data = localStorage.getItem(ANALIS_LOCATIONS_KEY);
-        return data ? JSON.parse(data) : DEFAULT_ANALIS_LOCATIONS;
-      } catch (e) {
-        return DEFAULT_ANALIS_LOCATIONS;
-      }
-    }
-    return this.getLocations(); // default: suhu
+    return this.getLocations();
   },
 
   saveLocationByJobdesk(jobdesk, location) {
-    const key = jobdesk === 'inspeksi' ? INSPEKSI_LOCATIONS_KEY : jobdesk === 'analis' ? ANALIS_LOCATIONS_KEY : LOCATIONS_KEY;
-    try {
-      const locations = this.getLocationsByJobdesk(jobdesk);
-      const trimmed = location.trim();
-      if (trimmed && !locations.includes(trimmed)) {
-        locations.push(trimmed);
-        localStorage.setItem(key, JSON.stringify(locations));
-        return true;
-      }
-      return false;
-    } catch (e) {
-      return false;
-    }
+    return this.saveLocation(location);
   },
 
   deleteLocationByJobdesk(jobdesk, location) {
-    const key = jobdesk === 'inspeksi' ? INSPEKSI_LOCATIONS_KEY : jobdesk === 'analis' ? ANALIS_LOCATIONS_KEY : LOCATIONS_KEY;
-    try {
-      const locations = this.getLocationsByJobdesk(jobdesk);
-      const filtered = locations.filter(l => l !== location);
-      localStorage.setItem(key, JSON.stringify(filtered));
-      return true;
-    } catch (e) {
-      return false;
-    }
+    return this.deleteLocation(location);
   },
 
   // --- STATION COORDINATES (Per-station geofence - Opsi B) ---
@@ -1156,7 +1113,8 @@ export const db = {
         }
       }
 
-      return { reports: mergedReports, attendance: mergedAtt, activities: mergedActivities };
+      const mergedHandovers = this.getHandovers();
+      return { reports: mergedReports, attendance: mergedAtt, activities: mergedActivities, handovers: mergedHandovers };
     } catch (e) {
       console.error("Sync failed:", e);
       throw e;
