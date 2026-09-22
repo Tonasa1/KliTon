@@ -61,6 +61,9 @@ const DEFAULT_USERS = [
 const DEFAULT_LOCATIONS = [
   'Pintu Keluar T4',
   'Pintu Keluar T5',
+  'Pintu keluar masuk T45',
+  'pintu keluar masuk T23',
+  'LBS/Dome T4',
   'Gudang Buffer',
   'Dome T4',
   'Dome T5',
@@ -82,6 +85,9 @@ const DEFAULT_STATION_COORDS = {
   // === SUHU stations ===
   'Pintu Keluar T4': { lat: -4.786256, lon: 119.614108, radius: 100 },
   'Pintu Keluar T5': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Pintu keluar masuk T45': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'pintu keluar masuk T23': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'LBS/Dome T4': { lat: -4.786256, lon: 119.614108, radius: 100 },
   'Gudang Buffer': { lat: -4.786256, lon: 119.614108, radius: 100 },
   'Dome T4': { lat: -4.786256, lon: 119.614108, radius: 100 },
   'Dome T5': { lat: -4.786256, lon: 119.614108, radius: 100 },
@@ -563,6 +569,7 @@ export const db = {
       if (trimmed && !locations.includes(trimmed)) {
         locations.push(trimmed);
         localStorage.setItem(LOCATIONS_KEY, JSON.stringify(locations));
+        this.uploadSettingsToCloud();
         return true;
       }
       return false;
@@ -576,6 +583,7 @@ export const db = {
       const locations = this.getLocations();
       const filtered = locations.filter(l => l !== location);
       localStorage.setItem(LOCATIONS_KEY, JSON.stringify(filtered));
+      this.uploadSettingsToCloud();
       return true;
     } catch (e) {
       return false;
@@ -615,6 +623,7 @@ export const db = {
       const coords = this.getStationCoords();
       coords[stationName] = { lat: parseFloat(lat), lon: parseFloat(lon), radius: parseInt(radius, 10) };
       localStorage.setItem(STATION_COORDS_KEY, JSON.stringify(coords));
+      this.uploadSettingsToCloud();
       return true;
     } catch (e) {
       return false;
@@ -624,6 +633,7 @@ export const db = {
   saveAllStationCoords(coordsObj) {
     try {
       localStorage.setItem(STATION_COORDS_KEY, JSON.stringify(coordsObj));
+      this.uploadSettingsToCloud();
       return true;
     } catch (e) {
       return false;
@@ -645,6 +655,7 @@ export const db = {
       const current = this.getSettings();
       const updated = { ...current, ...settings };
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(updated));
+      this.uploadSettingsToCloud();
       return updated;
     } catch (e) {
       return null;
@@ -1113,6 +1124,13 @@ export const db = {
         }
       }
 
+      // 12. Fetch & Merge settings (locations, stationCoords, geofence) from cloud
+      try {
+        await this.fetchSettingsFromCloud();
+      } catch (e) {
+        // Ignore if table doesn't exist
+      }
+
       const mergedHandovers = this.getHandovers();
       return { reports: mergedReports, attendance: mergedAtt, activities: mergedActivities, handovers: mergedHandovers };
     } catch (e) {
@@ -1487,5 +1505,69 @@ export const db = {
     }
     
     return { success: true, total: totalStripped };
+  },
+
+  async uploadSettingsToCloud() {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return;
+    try {
+      const headers = {
+        'apikey': key,
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates'
+      };
+      const payload = {
+        id: 'global',
+        data: {
+          locations: this.getLocations(),
+          stationCoords: this.getStationCoords(),
+          settings: this.getSettings()
+        },
+        updated_at: new Date().toISOString()
+      };
+      await fetch(`${url}/rest/v1/settings`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload)
+      });
+    } catch (e) {
+      console.error("Failed to upload settings to cloud:", e);
+    }
+  },
+
+  async fetchSettingsFromCloud() {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return null;
+    try {
+      const headers = {
+        'apikey': key,
+        'Authorization': `Bearer ${key}`
+      };
+      const res = await fetch(`${url}/rest/v1/settings?id=eq.global&select=*`, { headers });
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data && data.length > 0 && data[0].data) {
+        const cloudData = data[0].data;
+        if (cloudData.locations && Array.isArray(cloudData.locations)) {
+          localStorage.setItem(LOCATIONS_KEY, JSON.stringify(cloudData.locations));
+        }
+        if (cloudData.stationCoords && typeof cloudData.stationCoords === 'object') {
+          const _existingCoords = JSON.parse(localStorage.getItem(STATION_COORDS_KEY) || '{}');
+          const _mergedCoords = { ...DEFAULT_STATION_COORDS, ..._existingCoords, ...cloudData.stationCoords };
+          localStorage.setItem(STATION_COORDS_KEY, JSON.stringify(_mergedCoords));
+        }
+        if (cloudData.settings && typeof cloudData.settings === 'object') {
+          const _existingSettings = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+          const _mergedSettings = { ...DEFAULT_SETTINGS, ..._existingSettings, ...cloudData.settings };
+          localStorage.setItem(SETTINGS_KEY, JSON.stringify(_mergedSettings));
+        }
+        return cloudData;
+      }
+      return null;
+    } catch (e) {
+      console.error("Failed to fetch settings from cloud:", e);
+      return null;
+    }
   }
 };
