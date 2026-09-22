@@ -12,6 +12,7 @@ const INSPEKSI_LOCATIONS_KEY = 'thermascan_inspeksi_locations';
 const ANALIS_LOCATIONS_KEY = 'thermascan_analis_locations';
 const STATION_COORDS_KEY = 'thermascan_station_coords';
 const HANDOVERS_KEY = 'thermascan_handovers';
+const DEVICE_LOGS_KEY = 'thermascan_device_logs';
 
 const DEFAULT_OFFICERS = [
   'FAHRIL',
@@ -173,6 +174,9 @@ localStorage.setItem(STATION_COORDS_KEY, JSON.stringify(_mergedCoords));
 if (!localStorage.getItem(HANDOVERS_KEY)) {
   localStorage.setItem(HANDOVERS_KEY, JSON.stringify([]));
 }
+if (!localStorage.getItem(DEVICE_LOGS_KEY)) {
+  localStorage.setItem(DEVICE_LOGS_KEY, JSON.stringify([]));
+}
 
 export const db = {
   _safeSetItem(key, list) {
@@ -201,6 +205,112 @@ export const db = {
     }
   },
 
+  // --- DEVICE & MULTI-ACCOUNT AUDIT ---
+  getDeviceId() {
+    let id = localStorage.getItem('thermascan_device_id');
+    if (!id) {
+      id = 'dev_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 5);
+      localStorage.setItem('thermascan_device_id', id);
+    }
+    return id;
+  },
+
+  getDeviceLogs() {
+    try {
+      const data = localStorage.getItem(DEVICE_LOGS_KEY);
+      return data ? JSON.parse(data) : [];
+    } catch (e) {
+      return [];
+    }
+  },
+
+  recordDeviceLog(username, role, action = 'Login') {
+    if (!username) return;
+    try {
+      const logs = this.getDeviceLogs();
+      const newLog = {
+        id: 'dlog_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+        deviceId: this.getDeviceId(),
+        username,
+        role: role || 'Operator',
+        action,
+        timestamp: new Date().toISOString()
+      };
+      logs.unshift(newLog);
+      const trimmed = logs.slice(0, 200);
+      this._safeSetItem(DEVICE_LOGS_KEY, trimmed);
+      this.uploadSettingsToCloud();
+    } catch (e) {
+      console.error('Failed to record device log:', e);
+    }
+  },
+
+  getMultiAccountAudit() {
+    const logs = this.getDeviceLogs();
+    const attendance = this.getAttendance();
+    const reports = this.getReports();
+    const activities = this.getActivities();
+    const handovers = this.getHandovers();
+
+    const deviceMap = new Map();
+
+    const processEntry = (deviceId, username, role, action, timestamp) => {
+      if (!deviceId || !username) return;
+      if (role && role !== 'Operator') return; // Focus audit on Operator accounts
+
+      if (!deviceMap.has(deviceId)) {
+        deviceMap.set(deviceId, {
+          deviceId,
+          users: new Map(),
+          firstSeen: timestamp,
+          lastActive: timestamp
+        });
+      }
+      const dev = deviceMap.get(deviceId);
+      if (new Date(timestamp) > new Date(dev.lastActive)) dev.lastActive = timestamp;
+      if (new Date(timestamp) < new Date(dev.firstSeen)) dev.firstSeen = timestamp;
+
+      if (!dev.users.has(username)) {
+        dev.users.set(username, { name: username, count: 1, lastActive: timestamp, lastAction: action });
+      } else {
+        const u = dev.users.get(username);
+        u.count++;
+        if (new Date(timestamp) > new Date(u.lastActive)) {
+          u.lastActive = timestamp;
+          u.lastAction = action;
+        }
+      }
+    };
+
+    logs.forEach(l => processEntry(l.deviceId, l.username, l.role, l.action || 'Login', l.timestamp));
+    attendance.forEach(a => processEntry(a.deviceId, a.officer, 'Operator', `Absen ${a.type || ''}`, a.timestamp));
+    reports.forEach(r => processEntry(r.deviceId, r.officer, 'Operator', `Input Suhu (${r.location || ''})`, r.timestamp));
+    activities.forEach(act => processEntry(act.deviceId, act.officer, 'Operator', 'Input Kegiatan', act.timestamp));
+    handovers.forEach(h => {
+      if (h.senderName) processEntry(h.senderDeviceId || h.deviceId, h.senderName, 'Operator', 'Kirim Serah Terima', h.sentAt || h.timestamp);
+      if (h.receiverName) processEntry(h.receiverDeviceId || h.deviceId, h.receiverName, 'Operator', 'Terima Serah Terima', h.receivedAt || h.timestamp);
+    });
+
+    const result = [];
+    deviceMap.forEach((dev, key) => {
+      const userList = Array.from(dev.users.values());
+      const isMulti = userList.length > 1;
+      result.push({
+        deviceId: key,
+        userCount: userList.length,
+        isMultiAccount: isMulti,
+        users: userList,
+        lastActive: dev.lastActive,
+        firstSeen: dev.firstSeen
+      });
+    });
+
+    return result.sort((a, b) => {
+      if (a.isMultiAccount !== b.isMultiAccount) return b.isMultiAccount ? -1 : 1;
+      return new Date(b.lastActive) - new Date(a.lastActive);
+    });
+  },
+
   // --- SESSION LOGIN SYSTEM ---
   login(role, username, password, jobdesk = 'suhu') {
     const users = this.getUsers();
@@ -226,6 +336,7 @@ export const db = {
       jobdesk: role === 'Supervisor' && username.toLowerCase() === 'supervisor1' ? 'analis' : jobdesk 
     };
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    this.recordDeviceLog(user.username, user.role, 'Login Aplikasi');
     return session;
   },
 
@@ -259,10 +370,12 @@ export const db = {
       const newReport = {
         id: `rep_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         timestamp: new Date().toISOString(),
+        deviceId: this.getDeviceId(),
         ...report
       };
       reports.push(newReport);
       this._safeSetItem(REPORTS_KEY, reports);
+      this.recordDeviceLog(newReport.officer, 'Operator', `Input Suhu (${newReport.location || ''})`);
       this.uploadReportToCloud(newReport); // Upload to Supabase in background
       return newReport;
     } catch (e) {
@@ -310,10 +423,12 @@ export const db = {
       const newEntry = {
         id: `att_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         timestamp: new Date().toISOString(),
+        deviceId: this.getDeviceId(),
         ...attendance
       };
       list.push(newEntry);
       this._safeSetItem(ATTENDANCE_KEY, list);
+      this.recordDeviceLog(newEntry.officer, 'Operator', `Absen ${newEntry.type || ''}`);
       this.uploadAttendanceToCloud(newEntry); // Upload to Supabase in background
       return newEntry;
     } catch (e) {
@@ -375,10 +490,12 @@ export const db = {
       const newEntry = {
         id: `act_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         timestamp: new Date().toISOString(),
+        deviceId: this.getDeviceId(),
         ...activity
       };
       list.push(newEntry);
       this._safeSetItem(ACTIVITIES_KEY, list);
+      this.recordDeviceLog(newEntry.officer, 'Operator', 'Input Kegiatan');
       this.uploadActivityToCloud(newEntry);
       return newEntry;
     } catch (e) {
@@ -425,10 +542,12 @@ export const db = {
         id: `ho_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         sentAt: new Date().toISOString(),
         status: 'pending',
+        senderDeviceId: this.getDeviceId(),
         ...handover
       };
       list.push(newEntry);
       this._safeSetItem(HANDOVERS_KEY, list);
+      this.recordDeviceLog(newEntry.senderName, 'Operator', 'Kirim Serah Terima');
       this.uploadHandoverToCloud(newEntry);
       return newEntry;
     } catch (e) {
@@ -1577,7 +1696,8 @@ export const db = {
         data: {
           locations: this.getLocations(),
           stationCoords: this.getStationCoords(),
-          settings: this.getSettings()
+          settings: this.getSettings(),
+          deviceLogs: this.getDeviceLogs()
         },
         updated_at: new Date().toISOString()
       };
@@ -1616,6 +1736,16 @@ export const db = {
           const _existingSettings = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
           const _mergedSettings = { ...DEFAULT_SETTINGS, ..._existingSettings, ...cloudData.settings };
           localStorage.setItem(SETTINGS_KEY, JSON.stringify(_mergedSettings));
+        }
+        if (cloudData.deviceLogs && Array.isArray(cloudData.deviceLogs)) {
+          const localLogs = JSON.parse(localStorage.getItem(DEVICE_LOGS_KEY) || '[]');
+          const mergedLogsMap = new Map();
+          cloudData.deviceLogs.forEach(l => mergedLogsMap.set(l.id, l));
+          localLogs.forEach(l => mergedLogsMap.set(l.id, l));
+          const mergedLogs = Array.from(mergedLogsMap.values())
+            .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+            .slice(0, 200);
+          localStorage.setItem(DEVICE_LOGS_KEY, JSON.stringify(mergedLogs));
         }
         return cloudData;
       }
