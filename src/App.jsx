@@ -25,7 +25,8 @@ import {
   Lock,
   ClipboardList,
   FlaskConical,
-  CheckSquare
+  CheckSquare,
+  Smartphone
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { db } from './utils/db';
@@ -1662,9 +1663,9 @@ export default function App() {
     
     const term = searchQuery.toLowerCase();
     const matchSearch = 
-      r.location.toLowerCase().includes(term) ||
+      (r.location && r.location.toLowerCase().includes(term)) ||
       (r.officer && r.officer.toLowerCase().includes(term)) ||
-      r.temperature.toString().includes(term) ||
+      (r.temperature !== undefined && r.temperature !== null && r.temperature.toString().includes(term)) ||
       (r.notes && r.notes.toLowerCase().includes(term));
       
     // Date filter
@@ -1691,8 +1692,8 @@ export default function App() {
 
     const term = searchAttQuery.toLowerCase();
     const matchSearch = 
-      a.officer.toLowerCase().includes(term) ||
-      a.type.toLowerCase().includes(term) ||
+      (a.officer && a.officer.toLowerCase().includes(term)) ||
+      (a.type && a.type.toLowerCase().includes(term)) ||
       (a.isFakeGps ? 'fake' : '').includes(term);
 
     // Date filter
@@ -1888,8 +1889,8 @@ export default function App() {
     if (tabName === 'activity') return role === 'Operator' || role === 'Supervisor';
     if (tabName === 'attendance') return role === 'Operator';
     if (tabName === 'settings') return role === 'Administrator';
-    // Approval: hanya Supervisor & Manager
-    if (tabName === 'approval') return role === 'Supervisor' || role === 'Manager';
+    // Approval & Audit: Supervisor, Manager, dan Administrator
+    if (tabName === 'approval') return role === 'Supervisor' || role === 'Manager' || role === 'Administrator';
     return false;
 
   };
@@ -2483,6 +2484,82 @@ export default function App() {
 
           return (
             <div>
+              {/* --- AUDIT DETEKSI MULTI-AKUN PERANGKAT (Titip Absen & Pekerjaan) --- */}
+              {(() => {
+                const auditList = db.getMultiAccountAudit();
+                const multiDevs = auditList.filter(d => d.isMultiAccount);
+
+                return (
+                  <div className="glass-card" style={{ marginBottom: '20px', padding: '18px 20px', borderLeft: multiDevs.length > 0 ? '4px solid #ef4444' : '4px solid #10b981' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ background: multiDevs.length > 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)', color: multiDevs.length > 0 ? '#ef4444' : '#10b981', padding: '8px', borderRadius: '8px' }}>
+                          <Smartphone size={20} />
+                        </div>
+                        <div>
+                          <h3 style={{ fontSize: '1.05rem', fontWeight: '700', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            Audit Perangkat & Deteksi Titip Absen
+                            {multiDevs.length > 0 && (
+                              <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.65rem', padding: '2px 8px', borderRadius: '12px', fontWeight: '700' }}>
+                                {multiDevs.length} Perangkat Terindikasi
+                              </span>
+                            )}
+                          </h3>
+                          <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0 }}>
+                            Mendeteksi jika 1 HP / Laptop digunakan oleh lebih dari 1 akun Operator (Indikasi titip absen / titip pekerjaan)
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {multiDevs.length > 0 ? (
+                      <div>
+                        <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#ef4444', padding: '10px 14px', borderRadius: '8px', fontSize: '0.8rem', fontWeight: '600', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <AlertTriangle size={18} />
+                          <span>PERINGATAN: Terdeteksi {multiDevs.length} Perangkat HP/Laptop yang digunakan oleh beberapa akun Operator berbeda!</span>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
+                          {multiDevs.map((dev, idx) => (
+                            <div key={idx} style={{ background: 'var(--bg-card)', border: '1px solid rgba(239, 68, 68, 0.4)', borderRadius: '10px', padding: '12px 14px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: '700', fontFamily: 'monospace', color: 'var(--text-primary)' }}>
+                                  📱 Perangkat ID: {dev.deviceId}
+                                </span>
+                                <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.65rem', fontWeight: '700', padding: '2px 8px', borderRadius: '12px' }}>
+                                  {dev.userCount} Akun Operator
+                                </span>
+                              </div>
+
+                              <div style={{ fontSize: '0.75rem', marginBottom: '8px' }}>
+                                <div style={{ fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '4px' }}>Akun Operator yang Pernah Login/Absen di HP ini:</div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                  {dev.users.map((u, i) => (
+                                    <span key={i} style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '3px 8px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: '600' }}>
+                                      👤 {u.name} ({u.count}x {u.lastAction})
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--card-border)', paddingTop: '6px', marginTop: '6px', display: 'flex', justifyContent: 'space-between' }}>
+                                <span>Aktivitas Terakhir:</span>
+                                <strong>{new Date(dev.lastActive).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })}</strong>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#10b981', padding: '10px 14px', borderRadius: '8px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <CheckCircle size={18} />
+                        <span><strong>Semua Perangkat Steril:</strong> Belum terdeteksi penggunaan 1 HP/Laptop oleh lebih dari 1 akun Operator.</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               <div className="glass-card" style={{ marginBottom: '16px' }}>
                 <h3 className="section-title">
                   <CheckSquare size={16} style={{ color: 'var(--primary)' }} />
