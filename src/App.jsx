@@ -3852,37 +3852,37 @@ export default function App() {
                       <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '6px' }}>
                         📍 {loc}
                       </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1.2fr 0.8fr', gap: '6px' }}>
-                        <div>
-                          <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Latitude</label>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
+                        <div style={{ minWidth: 0 }}>
+                          <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)', display: 'block', whiteSpace: 'nowrap' }}>Latitude</label>
                           <input 
                             type="number" 
                             step="0.000001" 
                             className="form-control" 
-                            style={{ fontSize: '0.72rem', padding: '4px 6px' }}
+                            style={{ fontSize: '0.72rem', padding: '4px 6px', width: '100%', minWidth: 0 }}
                             value={coord.lat}
                             onChange={(e) => handleUpdateStationCoord(loc, 'lat', e.target.value)}
                             required
                           />
                         </div>
-                        <div>
-                          <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Longitude</label>
+                        <div style={{ minWidth: 0 }}>
+                          <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)', display: 'block', whiteSpace: 'nowrap' }}>Longitude</label>
                           <input 
                             type="number" 
                             step="0.000001" 
                             className="form-control" 
-                            style={{ fontSize: '0.72rem', padding: '4px 6px' }}
+                            style={{ fontSize: '0.72rem', padding: '4px 6px', width: '100%', minWidth: 0 }}
                             value={coord.lon}
                             onChange={(e) => handleUpdateStationCoord(loc, 'lon', e.target.value)}
                             required
                           />
                         </div>
-                        <div>
-                          <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Radius (m)</label>
+                        <div style={{ minWidth: 0 }}>
+                          <label style={{ fontSize: '0.65rem', color: '#10b981', fontWeight: 'bold', display: 'block', whiteSpace: 'nowrap' }}>Radius (m)</label>
                           <input 
                             type="number" 
                             className="form-control" 
-                            style={{ fontSize: '0.72rem', padding: '4px 6px' }}
+                            style={{ fontSize: '0.72rem', padding: '4px 6px', width: '100%', minWidth: 0, borderColor: '#10b981', fontWeight: 'bold' }}
                             value={coord.radius || 100}
                             onChange={(e) => handleUpdateStationCoord(loc, 'radius', e.target.value)}
                             required
