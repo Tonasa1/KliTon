@@ -1146,7 +1146,8 @@ export const db = {
       const headers = {
         'apikey': key,
         'Authorization': `Bearer ${key}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates'
       };
       await fetch(`${url}/rest/v1/reports`, {
         method: 'POST',
@@ -1165,7 +1166,8 @@ export const db = {
       const headers = {
         'apikey': key,
         'Authorization': `Bearer ${key}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates'
       };
       
       const mapped = {
@@ -1260,7 +1262,8 @@ export const db = {
       const headers = {
         'apikey': key,
         'Authorization': `Bearer ${key}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates'
       };
       await fetch(`${url}/rest/v1/activities`, {
         method: 'POST',
@@ -1279,7 +1282,8 @@ export const db = {
       const headers = {
         'apikey': key,
         'Authorization': `Bearer ${key}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates'
       };
       const mapped = {
         id: handover.id,
