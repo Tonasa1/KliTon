@@ -154,10 +154,10 @@ if (!localStorage.getItem(ACTIVITIES_KEY)) {
   localStorage.setItem(ACTIVITIES_KEY, JSON.stringify([]));
 }
 if (!localStorage.getItem(INSPEKSI_LOCATIONS_KEY)) {
-  localStorage.setItem(INSPEKSI_LOCATIONS_KEY, JSON.stringify(DEFAULT_INSPEKSI_LOCATIONS));
+  localStorage.setItem(INSPEKSI_LOCATIONS_KEY, JSON.stringify(DEFAULT_LOCATIONS));
 }
 if (!localStorage.getItem(ANALIS_LOCATIONS_KEY)) {
-  localStorage.setItem(ANALIS_LOCATIONS_KEY, JSON.stringify(DEFAULT_ANALIS_LOCATIONS));
+  localStorage.setItem(ANALIS_LOCATIONS_KEY, JSON.stringify(DEFAULT_LOCATIONS));
 }
 // Merge station coords: keep existing user edits, add new defaults
 const _existingCoords = JSON.parse(localStorage.getItem(STATION_COORDS_KEY) || '{}');
