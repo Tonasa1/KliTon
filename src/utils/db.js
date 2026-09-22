@@ -10,6 +10,8 @@ const SESSION_KEY = 'thermascan_session';
 const ACTIVITIES_KEY = 'thermascan_activities';
 const INSPEKSI_LOCATIONS_KEY = 'thermascan_inspeksi_locations';
 const ANALIS_LOCATIONS_KEY = 'thermascan_analis_locations';
+const STATION_COORDS_KEY = 'thermascan_station_coords';
+const HANDOVERS_KEY = 'thermascan_handovers';
 
 const DEFAULT_OFFICERS = [
   'FAHRIL',
@@ -83,13 +85,48 @@ const DEFAULT_ANALIS_LOCATIONS = [
   'Lainnya...'
 ];
 
+// Koordinat GPS per stasiun kerja (Opsi B - geofence per lokasi)
+const DEFAULT_STATION_COORDS = {
+  // === SUHU stations ===
+  'Pintu Keluar T4': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Pintu Keluar T5': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Gudang Buffer': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Dome T4': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Dome T5': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Gudang BKS': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Hopper': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  // === INSPEKSI stations ===
+  'Area Produksi': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Gudang Bahan Baku': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Ruang Kontrol': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Area Conveyor': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  // === ANALIS stations ===
+  'Laboratorium Utama': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Lab Kimia': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Lab Fisika': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Area Sampling': { lat: -4.786256, lon: 119.614108, radius: 100 },
+};
+
 const DEFAULT_SETTINGS = {
-  highTempAlert: 60.0, // Warning threshold for industrial machines
-  feverTempAlert: 80.0, // Danger threshold for industrial machines
+  highTempAlert: 60.0,
+  feverTempAlert: 80.0,
   enableGeofence: false,
-  geofenceLat: -6.200000,
-  geofenceLon: 106.816666,
-  geofenceRadius: 100
+  // 1. Suhu - Day Shift & Piket
+  geofenceSuhuDayLat: -4.786256,
+  geofenceSuhuDayLon: 119.614108,
+  geofenceSuhuDayRadius: 100,
+  // 2. Suhu - Shift (1, 2, 3)
+  geofenceSuhuShiftLat: -4.786256,
+  geofenceSuhuShiftLon: 119.614108,
+  geofenceSuhuShiftRadius: 100,
+  // 3. Inspeksi - Shift (1, 2, 3)
+  geofenceInspeksiShiftLat: -4.786256,
+  geofenceInspeksiShiftLon: 119.614108,
+  geofenceInspeksiShiftRadius: 100,
+  // 4. Analis - Day Shift & Piket
+  geofenceAnalisDayLat: -4.786256,
+  geofenceAnalisDayLon: 119.614108,
+  geofenceAnalisDayRadius: 100
 };
 
 // Initialize default data if not present
@@ -129,6 +166,14 @@ if (!localStorage.getItem(INSPEKSI_LOCATIONS_KEY)) {
 }
 if (!localStorage.getItem(ANALIS_LOCATIONS_KEY)) {
   localStorage.setItem(ANALIS_LOCATIONS_KEY, JSON.stringify(DEFAULT_ANALIS_LOCATIONS));
+}
+// Merge station coords: keep existing user edits, add new defaults
+const _existingCoords = JSON.parse(localStorage.getItem(STATION_COORDS_KEY) || '{}');
+const _mergedCoords = { ...DEFAULT_STATION_COORDS, ..._existingCoords };
+localStorage.setItem(STATION_COORDS_KEY, JSON.stringify(_mergedCoords));
+
+if (!localStorage.getItem(HANDOVERS_KEY)) {
+  localStorage.setItem(HANDOVERS_KEY, JSON.stringify([]));
 }
 
 export const db = {
@@ -364,6 +409,62 @@ export const db = {
     }
   },
 
+  // --- HANDOVERS (Serah Terima Pekerjaan) ---
+  getHandovers() {
+    try {
+      const data = localStorage.getItem(HANDOVERS_KEY);
+      return data ? JSON.parse(data).sort((a, b) => new Date(b.sentAt || b.timestamp || Date.now()) - new Date(a.sentAt || a.timestamp || Date.now())) : [];
+    } catch (e) {
+      console.error('Failed to parse handovers:', e);
+      return [];
+    }
+  },
+
+  saveHandover(handover) {
+    try {
+      const list = this.getHandovers();
+      const newEntry = {
+        id: `ho_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        sentAt: new Date().toISOString(),
+        status: 'pending',
+        ...handover
+      };
+      list.push(newEntry);
+      this._safeSetItem(HANDOVERS_KEY, list);
+      this.uploadHandoverToCloud(newEntry);
+      return newEntry;
+    } catch (e) {
+      console.error('Failed to save handover:', e);
+      return null;
+    }
+  },
+
+  updateHandover(updatedRecord) {
+    try {
+      const list = this.getHandovers();
+      const idx = list.findIndex(h => h.id === updatedRecord.id);
+      if (idx === -1) return false;
+      list[idx] = updatedRecord;
+      this._safeSetItem(HANDOVERS_KEY, list);
+      this.updateHandoverOnCloud(updatedRecord);
+      return true;
+    } catch (e) {
+      console.error('Failed to update handover:', e);
+      return false;
+    }
+  },
+
+  deleteHandover(id) {
+    try {
+      const list = this.getHandovers();
+      const filtered = list.filter(h => h.id !== id);
+      this._safeSetItem(HANDOVERS_KEY, filtered);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  },
+
   // --- OFFICERS (Petugas) & USERS ---
   getUsers() {
     try {
@@ -531,6 +632,41 @@ export const db = {
       const locations = this.getLocationsByJobdesk(jobdesk);
       const filtered = locations.filter(l => l !== location);
       localStorage.setItem(key, JSON.stringify(filtered));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  },
+
+  // --- STATION COORDINATES (Per-station geofence - Opsi B) ---
+  getStationCoords() {
+    try {
+      const data = localStorage.getItem(STATION_COORDS_KEY);
+      return data ? JSON.parse(data) : DEFAULT_STATION_COORDS;
+    } catch (e) {
+      return DEFAULT_STATION_COORDS;
+    }
+  },
+
+  getStationCoord(stationName) {
+    const coords = this.getStationCoords();
+    return coords[stationName] || null;
+  },
+
+  saveStationCoord(stationName, lat, lon, radius) {
+    try {
+      const coords = this.getStationCoords();
+      coords[stationName] = { lat: parseFloat(lat), lon: parseFloat(lon), radius: parseInt(radius, 10) };
+      localStorage.setItem(STATION_COORDS_KEY, JSON.stringify(coords));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  },
+
+  saveAllStationCoords(coordsObj) {
+    try {
+      localStorage.setItem(STATION_COORDS_KEY, JSON.stringify(coordsObj));
       return true;
     } catch (e) {
       return false;
@@ -950,6 +1086,27 @@ export const db = {
         }
       }
 
+      // 8.5. Fetch & Merge Handovers from cloud
+      try {
+        const cloudHandovers = await this.fetchHandoversFromCloud();
+        const localHandovers = this.getHandovers();
+        const mergedHoMap = new Map();
+        cloudHandovers.forEach(h => mergedHoMap.set(h.id, h));
+        localHandovers.forEach(h => mergedHoMap.set(h.id, h));
+        const mergedHandovers = Array.from(mergedHoMap.values())
+          .sort((a, b) => new Date(b.sentAt || b.timestamp || Date.now()) - new Date(a.sentAt || a.timestamp || Date.now()));
+        this._safeSetItem(HANDOVERS_KEY, mergedHandovers);
+
+        // Upload missing local handovers to cloud
+        const cloudHoIds = new Set(cloudHandovers.map(h => h.id));
+        const hoToUpload = localHandovers.filter(h => !cloudHoIds.has(h.id));
+        for (const h of hoToUpload) {
+          await this.uploadHandoverToCloud(h);
+        }
+      } catch (e) {
+        // Ignore if table doesn't exist
+      }
+
       // 9. Fetch users from cloud
       let cloudUsers = [];
       try {
@@ -1048,8 +1205,8 @@ export const db = {
         is_fake_gps: attendance.isFakeGps,
         notes: attendance.notes || null,
         status: attendance.status || 'Disetujui',
-        spv_approval: attendance.spvApproval || null,
-        manager_approval: attendance.managerApproval || null
+        spv_approval: attendance.spvApproval ? (typeof attendance.spvApproval === 'object' ? JSON.stringify(attendance.spvApproval) : attendance.spvApproval) : null,
+        manager_approval: attendance.managerApproval ? (typeof attendance.managerApproval === 'object' ? JSON.stringify(attendance.managerApproval) : attendance.managerApproval) : null
       };
 
       await fetch(`${url}/rest/v1/attendance`, {
@@ -1106,8 +1263,8 @@ export const db = {
         is_fake_gps: attendance.isFakeGps,
         notes: attendance.notes || null,
         status: attendance.status || 'Disetujui',
-        spv_approval: attendance.spvApproval || null,
-        manager_approval: attendance.managerApproval || null
+        spv_approval: attendance.spvApproval ? (typeof attendance.spvApproval === 'object' ? JSON.stringify(attendance.spvApproval) : attendance.spvApproval) : null,
+        manager_approval: attendance.managerApproval ? (typeof attendance.managerApproval === 'object' ? JSON.stringify(attendance.managerApproval) : attendance.managerApproval) : null
       };
 
       await fetch(`${url}/rest/v1/attendance?id=eq.${attendance.id}`, {
@@ -1136,6 +1293,139 @@ export const db = {
       });
     } catch (e) {
       console.error("Failed to upload activity to cloud:", e);
+    }
+  },
+
+  async uploadHandoverToCloud(handover) {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return;
+    try {
+      const headers = {
+        'apikey': key,
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json'
+      };
+      const mapped = {
+        id: handover.id,
+        type: handover.type,
+        jobdesk: handover.jobdesk,
+        shift_from: handover.shiftFrom || null,
+        shift_to: handover.shiftTo || null,
+        sender_name: handover.senderName,
+        sender_station: handover.senderStation || null,
+        sender_lat: handover.senderLat || null,
+        sender_lon: handover.senderLon || null,
+        sent_at: handover.sentAt || new Date().toISOString(),
+        summary: handover.summary || '',
+        issues: handover.issues || '',
+        notes: handover.notes || '',
+        receiver_name: handover.receiverName || null,
+        receiver_station: handover.receiverStation || null,
+        receiver_lat: handover.receiverLat || null,
+        receiver_lon: handover.receiverLon || null,
+        received_at: handover.receivedAt || null,
+        piket_date: handover.piketDate || null,
+        piket_checklist: handover.piketChecklist ? (typeof handover.piketChecklist === 'string' ? handover.piketChecklist : JSON.stringify(handover.piketChecklist)) : null,
+        sender_from: handover.senderFrom || 'personnel',
+        status: handover.status || 'pending',
+        notified_spv: handover.notifiedSpv || false,
+        notified_manager: handover.notifiedManager || false
+      };
+      await fetch(`${url}/rest/v1/handovers`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(mapped)
+      });
+    } catch (e) {
+      console.error("Failed to upload handover to cloud:", e);
+    }
+  },
+
+  async updateHandoverOnCloud(handover) {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return;
+    try {
+      const headers = {
+        'apikey': key,
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json'
+      };
+      const mapped = {
+        id: handover.id,
+        type: handover.type,
+        jobdesk: handover.jobdesk,
+        shift_from: handover.shiftFrom || null,
+        shift_to: handover.shiftTo || null,
+        sender_name: handover.senderName,
+        sender_station: handover.senderStation || null,
+        sender_lat: handover.senderLat || null,
+        sender_lon: handover.senderLon || null,
+        sent_at: handover.sentAt || new Date().toISOString(),
+        summary: handover.summary || '',
+        issues: handover.issues || '',
+        notes: handover.notes || '',
+        receiver_name: handover.receiverName || null,
+        receiver_station: handover.receiverStation || null,
+        receiver_lat: handover.receiverLat || null,
+        receiver_lon: handover.receiverLon || null,
+        received_at: handover.receivedAt || null,
+        piket_date: handover.piketDate || null,
+        piket_checklist: handover.piketChecklist ? (typeof handover.piketChecklist === 'string' ? handover.piketChecklist : JSON.stringify(handover.piketChecklist)) : null,
+        sender_from: handover.senderFrom || 'personnel',
+        status: handover.status || 'pending',
+        notified_spv: handover.notifiedSpv || false,
+        notified_manager: handover.notifiedManager || false
+      };
+      await fetch(`${url}/rest/v1/handovers?id=eq.${handover.id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify(mapped)
+      });
+    } catch (e) {
+      console.error("Failed to update handover on cloud:", e);
+    }
+  },
+
+  async fetchHandoversFromCloud() {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return [];
+    try {
+      const headers = {
+        'apikey': key,
+        'Authorization': `Bearer ${key}`
+      };
+      const res = await fetch(`${url}/rest/v1/handovers?select=*`, { headers });
+      if (!res.ok) return [];
+      const cloudData = await res.json();
+      return cloudData.map(h => ({
+        id: h.id,
+        type: h.type,
+        jobdesk: h.jobdesk,
+        shiftFrom: h.shift_from,
+        shiftTo: h.shift_to,
+        senderName: h.sender_name,
+        senderStation: h.sender_station,
+        senderLat: h.sender_lat,
+        senderLon: h.sender_lon,
+        sentAt: h.sent_at,
+        summary: h.summary,
+        issues: h.issues,
+        notes: h.notes,
+        receiverName: h.receiver_name,
+        receiverStation: h.receiver_station,
+        receiverLat: h.receiver_lat,
+        receiverLon: h.receiver_lon,
+        receivedAt: h.received_at,
+        piketDate: h.piket_date,
+        piketChecklist: h.piket_checklist ? (typeof h.piket_checklist === 'string' ? JSON.parse(h.piket_checklist) : h.piket_checklist) : null,
+        senderFrom: h.sender_from,
+        status: h.status,
+        notifiedSpv: h.notified_spv,
+        notifiedManager: h.notified_manager
+      }));
+    } catch (e) {
+      console.error("Failed to fetch handovers from cloud:", e);
+      return [];
     }
   },
 
