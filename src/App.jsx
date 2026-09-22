@@ -324,6 +324,9 @@ export default function App() {
           if (res.activities) setActivities(res.activities);
           if (res.handovers) setHandovers(res.handovers);
           setUsers(db.getUsers());
+          setStationCoords(db.getStationCoords());
+          setLocations(db.getLocations());
+          setSettings(db.getSettings());
           showToast("Data tersinkronisasi otomatis dengan Cloud DB.", "success");
         }
       }).catch(err => {
@@ -345,8 +348,11 @@ export default function App() {
           setReports(res.reports);
           setAttendance(res.attendance);
           if (res.activities) setActivities(res.activities);
+          if (res.handovers) setHandovers(res.handovers);
           setUsers(db.getUsers());
-          setHandovers(db.getHandovers());
+          setStationCoords(db.getStationCoords());
+          setLocations(db.getLocations());
+          setSettings(db.getSettings());
         }
       } catch (e) {
         // silent fail for background sync
@@ -924,7 +930,7 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
-  // --- GEOLOCATION & FAKE GPS DETECTION ---
+  // --- GEOLOCATION & FAKE GPS DETECTION (WITH DUAL-TIER FALLBACK) ---
   const lockGeolocation = () => {
     if (!navigator.geolocation) {
       showToast("Geolocation tidak didukung oleh perangkat ini.", "error");
@@ -933,60 +939,64 @@ export default function App() {
 
     setAttGpsLoading(true);
     setAttGpsData(null);
-    const startTime = performance.now();
 
+    const handleSuccess = (position) => {
+      const lat = position.coords.latitude;
+      const lon = position.coords.longitude;
+      const acc = position.coords.accuracy || 10;
+      
+      let isFake = false;
+      if (navigator.webdriver || acc === 0 || (Number.isInteger(lat) && Number.isInteger(lon))) {
+        isFake = true;
+      }
+
+      setAttGpsData({
+        latitude: lat,
+        longitude: lon,
+        accuracy: (Number(acc) || 10).toFixed(1),
+        isFakeGps: isFake
+      });
+      
+      setAttGpsLoading(false);
+      if (isFake) {
+        showToast("Peringatan: Terdeteksi indikasi manipulasi lokasi (Fake GPS)!", "error");
+      } else {
+        showToast("Lokasi GPS berhasil dikunci secara akurat.", "success");
+      }
+    };
+
+    const handleError = (error) => {
+      console.warn("GPS High Accuracy timed out or failed, switching to Network/Wi-Fi location...", error);
+      // Fallback to network/cellular/WiFi triangulation
+      navigator.geolocation.getCurrentPosition(
+        handleSuccess,
+        (err2) => {
+          console.error("GPS Fallback Error:", err2);
+          let errorMsg = "Gagal mendapatkan lokasi GPS. Harap aktifkan ikon Lokasi (GPS) di HP Anda.";
+          if (err2.code === err2.PERMISSION_DENIED) {
+            errorMsg = "Akses lokasi ditolak. Harap aktifkan Lokasi HP & izinkan lokasi Chrome.";
+          } else if (err2.code === err2.TIMEOUT) {
+            errorMsg = "Pencarian lokasi terlalu lama. Harap aktifkan Wi-Fi/GPS HP Anda.";
+          }
+          showToast(errorMsg, "error");
+          setAttGpsLoading(false);
+          setAttGpsData({
+            latitude: null,
+            longitude: null,
+            accuracy: null,
+            isFakeGps: false,
+            error: err2.message
+          });
+        },
+        { enableHighAccuracy: false, timeout: 15000, maximumAge: 30000 }
+      );
+    };
+
+    // Attempt 1: High accuracy GPS (8s timeout)
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const endTime = performance.now();
-        const duration = endTime - startTime;
-        
-        const lat = position.coords.latitude;
-        const lon = position.coords.longitude;
-        const acc = position.coords.accuracy;
-        
-        let isFake = false;
-        
-        if (navigator.webdriver) {
-          isFake = true;
-        }
-        if (acc === 0) {
-          isFake = true;
-        }
-        if (Number.isInteger(lat) && Number.isInteger(lon)) {
-          isFake = true;
-        }
-
-        setAttGpsData({
-          latitude: lat,
-          longitude: lon,
-          accuracy: acc.toFixed(1),
-          isFakeGps: isFake
-        });
-        
-        setAttGpsLoading(false);
-        if (isFake) {
-          showToast("Peringatan: Terdeteksi indikasi manipulasi lokasi (Fake GPS)!", "error");
-        } else {
-          showToast("Lokasi GPS berhasil dikunci secara akurat.", "success");
-        }
-      },
-      (error) => {
-        console.error("GPS Lock Error:", error);
-        let errorMsg = "Gagal mendapatkan lokasi GPS.";
-        if (error.code === error.PERMISSION_DENIED) {
-          errorMsg = "Akses lokasi ditolak. Harap aktifkan GPS dan izinkan browser mengakses lokasi.";
-        }
-        showToast(errorMsg, "error");
-        setAttGpsLoading(false);
-        setAttGpsData({
-          latitude: null,
-          longitude: null,
-          accuracy: null,
-          isFakeGps: false,
-          error: error.message
-        });
-      },
-      { enableHighAccuracy: true, timeout: 20000, maximumAge: 10000 }
+      handleSuccess,
+      handleError,
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 5000 }
     );
   };
 
@@ -1461,7 +1471,12 @@ export default function App() {
         if (res) {
           setReports(res.reports);
           setAttendance(res.attendance);
-          setUsers(db.getUsers()); // Update users state
+          if (res.activities) setActivities(res.activities);
+          if (res.handovers) setHandovers(res.handovers);
+          setUsers(db.getUsers());
+          setStationCoords(db.getStationCoords());
+          setLocations(db.getLocations());
+          setSettings(db.getSettings());
           showToast("Sinkronisasi data awal berhasil!", "success");
         }
       } catch (err) {
@@ -1484,7 +1499,12 @@ export default function App() {
       if (res) {
         setReports(res.reports);
         setAttendance(res.attendance);
-        setUsers(db.getUsers()); // Update users state
+        if (res.activities) setActivities(res.activities);
+        if (res.handovers) setHandovers(res.handovers);
+        setUsers(db.getUsers());
+        setStationCoords(db.getStationCoords());
+        setLocations(db.getLocations());
+        setSettings(db.getSettings());
         showToast("Sinkronisasi cloud berhasil diselesaikan!", "success");
       } else {
         showToast("Koneksi cloud belum dikonfigurasi.", "error");
@@ -1551,6 +1571,37 @@ export default function App() {
     e.preventDefault();
     db.saveAllStationCoords(stationCoords);
     showToast("Koordinat stasiun kerja berhasil disimpan!", "success");
+  };
+
+  const handleSetCurrentLocationToStation = (stationName) => {
+    if (!navigator.geolocation) {
+      showToast("Geolocation tidak didukung oleh perangkat ini.", "error");
+      return;
+    }
+    showToast(`Mengambil lokasi GPS untuk stasiun ${stationName}...`, "info");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        setStationCoords(prev => {
+          const updated = {
+            ...prev,
+            [stationName]: {
+              ...(prev[stationName] || { radius: 100 }),
+              lat,
+              lon
+            }
+          };
+          db.saveAllStationCoords(updated);
+          return updated;
+        });
+        showToast(`Koordinat stasiun ${stationName} berhasil diisi ke posisi Anda!`, "success");
+      },
+      (err) => {
+        showToast("Gagal mengambil GPS HP. Pastikan GPS aktif.", "error");
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   };
 
   const handleAddUser = (e) => {
@@ -3931,8 +3982,17 @@ export default function App() {
                   const coord = stationCoords[loc] || { lat: -4.786256, lon: 119.614108, radius: 100 };
                   return (
                     <div key={idx} style={{ background: 'rgba(255,255,255,0.02)', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--card-border)' }}>
-                      <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '6px' }}>
-                        📍 {loc}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-primary)' }}>
+                          📍 {loc}
+                        </span>
+                        <button 
+                          type="button" 
+                          onClick={() => handleSetCurrentLocationToStation(loc)}
+                          style={{ fontSize: '0.65rem', padding: '2px 8px', background: 'rgba(59, 130, 246, 0.15)', color: '#3b82f6', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
+                        >
+                          🎯 Set Ke GPS Saya Saat Ini
+                        </button>
                       </div>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
                         <div style={{ minWidth: 0 }}>
