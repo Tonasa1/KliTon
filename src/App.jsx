@@ -76,8 +76,20 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
   return d; // Distance in meters
 };
 
-// Get specific Geofence target based on jobdesk and shift
-const getTargetGeofence = (jobdesk, shift, settings) => {
+// Get specific Geofence target based on jobdesk, shift, and selected station
+const getTargetGeofence = (jobdesk, shift, settings, stationName = '', stationCoords = {}) => {
+  // Opsi B: Jika stasiun dipilih dan koordinatnya tersedia, gunakan koordinat stasiun
+  if (stationName && stationName !== 'Lainnya...' && stationCoords[stationName]) {
+    const sc = stationCoords[stationName];
+    return {
+      lat: sc.lat,
+      lon: sc.lon,
+      radius: sc.radius || 100,
+      label: stationName
+    };
+  }
+
+  // Fallback: 4-zona global berdasarkan jobdesk + shift
   const jd = (jobdesk || 'suhu').toLowerCase();
   const isShiftType = ['Shift 1', 'Shift 2', 'Shift 3'].includes(shift);
 
@@ -158,6 +170,28 @@ export default function App() {
   const [attGpsData, setAttGpsData] = useState(null); // { latitude, longitude, accuracy, isFakeGps }
   const [attNotes, setAttNotes] = useState('');
   const [attShift, setAttShift] = useState('Day Shift');
+  const [attStation, setAttStation] = useState('');
+  const [stationCoords, setStationCoords] = useState(() => db.getStationCoords());
+  const attMapRef = useRef(null); // Leaflet map instance
+  const attMapContainerRef = useRef(null); // DOM div for map
+  
+  // Handover (Serah Terima Pekerjaan) States
+  const [handovers, setHandovers] = useState(() => db.getHandovers());
+  const [showHandoverForm, setShowHandoverForm] = useState(false);
+  const [showHandoverReceive, setShowHandoverReceive] = useState(false);
+  const [showPiketForm, setShowPiketForm] = useState(false);
+  const [showPiketReminder, setShowPiketReminder] = useState(false);
+  const [showSpvHandoverForm, setShowSpvHandoverForm] = useState(false);
+  const [handoverData, setHandoverData] = useState({ summary: '', issues: '', notes: '' });
+  const [piketChecklist, setPiketChecklist] = useState([]);
+  const [activeHandoverToReceive, setActiveHandoverToReceive] = useState(null);
+  const [piketRemindersToView, setPiketRemindersToView] = useState([]);
+  const [isHandoverAssigned, setIsHandoverAssigned] = useState(false);
+  const [isHandoverSent, setIsHandoverSent] = useState(false);
+  const [handoverReceiveStation, setHandoverReceiveStation] = useState('');
+  const [spvTargetPiket, setSpvTargetPiket] = useState('today');
+  const [spvTargetOfficer, setSpvTargetOfficer] = useState('Semua');
+  const [piketPendingWarning, setPiketPendingWarning] = useState(false);
   
   // History Sub-Tab States
   const [historySubTab, setHistorySubTab] = useState('suhu'); // 'suhu' | 'absensi'
@@ -310,6 +344,7 @@ export default function App() {
           setAttendance(res.attendance);
           if (res.activities) setActivities(res.activities);
           setUsers(db.getUsers());
+          setHandovers(db.getHandovers());
         }
       } catch (e) {
         // silent fail for background sync
@@ -317,6 +352,128 @@ export default function App() {
     }, 30000); // setiap 30 detik
     return () => clearInterval(interval);
   }, []);
+
+  // --- HANDOVER SHIFT & PIKET CHECKER & TIMER ---
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== 'Operator') return;
+
+    const userJobdesk = currentUser.jobdesk || 'suhu';
+    const userName = currentUser.name;
+    const now = new Date();
+    const todayStr = now.toDateString();
+
+    // 1. Shift Handover Timer & Random Assign (30 mins before shift end)
+    const checkShiftHandoverTimer = () => {
+      const myTodayCheckIn = attendance.find(a => 
+        a.officer === userName && 
+        a.type === 'Check In' && 
+        new Date(a.timestamp).toDateString() === todayStr
+      );
+
+      if (!myTodayCheckIn) return;
+
+      const userShift = myTodayCheckIn.notes ? (
+        myTodayCheckIn.notes.match(/Jadwal:\s*([^|\]]+)/)?.[1]?.trim() || attShift
+      ) : attShift;
+
+      if (!['suhu', 'inspeksi'].includes(userJobdesk) || !['Shift 1', 'Shift 2', 'Shift 3'].includes(userShift)) {
+        return;
+      }
+
+      let endHour = 15, endMin = 30;
+      if (userShift === 'Shift 2') { endHour = 22; endMin = 30; }
+      else if (userShift === 'Shift 3') { endHour = 7; endMin = 30; }
+
+      const shiftEnd = new Date(now);
+      shiftEnd.setHours(endHour, endMin, 0, 0);
+
+      if (userShift === 'Shift 3' && now.getHours() > 7) {
+        shiftEnd.setDate(shiftEnd.getDate() + 1);
+      }
+
+      const diffMs = shiftEnd - now;
+      const diffMins = Math.floor(diffMs / 60000);
+
+      // 30 minutes before shift end or up to 2 hours after
+      if (diffMins <= 30 && diffMins >= -120) {
+        const existingHo = handovers.find(h => 
+          h.type === 'shift' && 
+          h.jobdesk === userJobdesk && 
+          h.shiftFrom === userShift && 
+          new Date(h.sentAt).toDateString() === todayStr
+        );
+
+        if (!existingHo) {
+          const shiftAttendees = attendance.filter(a => 
+            a.type === 'Check In' && 
+            (a.jobdesk || 'suhu') === userJobdesk && 
+            new Date(a.timestamp).toDateString() === todayStr
+          );
+
+          const attendeeNames = [...new Set(shiftAttendees.map(a => a.officer))];
+          if (attendeeNames.length > 0) {
+            const charSum = todayStr.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+            const pickedIndex = charSum % attendeeNames.length;
+            const assignedOfficer = attendeeNames[pickedIndex];
+
+            if (assignedOfficer === userName) {
+              setIsHandoverAssigned(true);
+              if (!isHandoverSent) {
+                setShowHandoverForm(true);
+              }
+            }
+          }
+        } else {
+          setIsHandoverSent(true);
+        }
+      }
+    };
+
+    checkShiftHandoverTimer();
+    const timerInterval = setInterval(checkShiftHandoverTimer, 30000);
+
+    // 2. Shift Receiver Check (After Check In)
+    const myShiftCheckIn = attendance.find(a => 
+      a.officer === userName && 
+      a.type === 'Check In' && 
+      new Date(a.timestamp).toDateString() === todayStr
+    );
+
+    if (myShiftCheckIn) {
+      const myShift = myShiftCheckIn.notes ? (
+        myShiftCheckIn.notes.match(/Jadwal:\s*([^|\]]+)/)?.[1]?.trim() || attShift
+      ) : attShift;
+
+      const pendingHo = handovers.find(h => 
+        h.type === 'shift' && 
+        h.jobdesk === userJobdesk && 
+        h.shiftTo === myShift && 
+        h.status === 'pending'
+      );
+
+      if (pendingHo && !activeHandoverToReceive) {
+        const newShiftAttendees = attendance.filter(a => 
+          a.type === 'Check In' && 
+          (a.jobdesk || 'suhu') === userJobdesk && 
+          new Date(a.timestamp).toDateString() === todayStr
+        );
+        const attendeeNames = [...new Set(newShiftAttendees.map(a => a.officer))];
+
+        if (attendeeNames.length > 0) {
+          const charSum = (pendingHo.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+          const pickedIndex = charSum % attendeeNames.length;
+          const assignedReceiver = attendeeNames[pickedIndex];
+
+          if (assignedReceiver === userName) {
+            setActiveHandoverToReceive(pendingHo);
+            setShowHandoverReceive(true);
+          }
+        }
+      }
+    }
+
+    return () => clearInterval(timerInterval);
+  }, [currentUser, attendance, handovers, isHandoverSent]);
 
 
   // Update default login usernames based on role and jobdesk
@@ -959,7 +1116,7 @@ export default function App() {
 
     // 1. LOGIKA CHECK IN (Shift & Late/Izin Calculation)
     if (attType === 'Check In') {
-      computedNotes = `[Jadwal: ${attShift}] ` + computedNotes;
+      computedNotes = `[Jadwal: ${attShift} | Stasiun: ${attStation || 'Utama'}] ` + computedNotes;
       
       // Hitung keterlambatan berdasarkan Shift
       let expectedHour = 7, expectedMin = 30; // Default 07.30
@@ -1004,8 +1161,14 @@ export default function App() {
       }
     }
 
-    // 4. LOGIKA CHECK OUT (Cek jika ada Izin Keluar tanpa Izin Kembali)
+    // 4. LOGIKA CHECK OUT (Cek jika ada Izin Keluar tanpa Izin Kembali & Check Handover Shift)
     if (attType === 'Check Out') {
+      if (['suhu', 'inspeksi'].includes(attJobdesk) && isHandoverAssigned && !isHandoverSent) {
+        showToast("⚠️ Anda ditunjuk mengisi Form Serah Terima Shift! Harap isi form terlebih dahulu.", "error");
+        setShowHandoverForm(true);
+        return;
+      }
+
       const lastIzinKeluar = todayAtts.find(a => a.type === 'Izin Keluar');
       const hasIzinKembaliAfter = lastIzinKeluar && todayAtts.some(a => a.type === 'Izin Kembali' && new Date(a.timestamp) > new Date(lastIzinKeluar.timestamp));
       
@@ -1041,6 +1204,10 @@ export default function App() {
       setAttNotes('');
       setHistorySubTab('absensi');
       setActiveTab('history');
+      if (attType === 'Check Out' && ['Piket', 'Lembur'].includes(attShift)) {
+        setShowPiketForm(true);
+        setPiketPendingWarning(true);
+      }
     } else {
       showToast("Gagal menyimpan absensi.", "error");
     }
@@ -1090,6 +1257,160 @@ export default function App() {
       db.clearAllActivities();
       setActivities([]);
       showToast("Seluruh data kegiatan telah dikosongkan.", "success");
+    }
+  };
+
+  // --- HANDOVER SUBMISSION HANDLERS ---
+  const handleSendShiftHandover = (e) => {
+    e.preventDefault();
+    if (!handoverData.summary.trim() || !handoverData.issues.trim()) {
+      showToast("Harap isi Ringkasan Pekerjaan dan Masalah Tindak Lanjut!", "error");
+      return;
+    }
+
+    const myTodayCheckIn = attendance.find(a => 
+      a.officer === currentUser.name && 
+      a.type === 'Check In' && 
+      new Date(a.timestamp).toDateString() === new Date().toDateString()
+    );
+
+    const userShift = myTodayCheckIn?.notes ? (
+      myTodayCheckIn.notes.match(/Jadwal:\s*([^|\]]+)/)?.[1]?.trim() || attShift
+    ) : attShift;
+
+    let nextShift = 'Shift 2';
+    if (userShift === 'Shift 2') nextShift = 'Shift 3';
+    else if (userShift === 'Shift 3') nextShift = 'Shift 1';
+
+    const newHandover = {
+      type: 'shift',
+      jobdesk: currentUser.jobdesk || 'suhu',
+      shiftFrom: userShift,
+      shiftTo: nextShift,
+      senderName: currentUser.name,
+      senderStation: attStation || 'Stasiun Utama',
+      senderLat: attGpsData ? attGpsData.latitude : null,
+      senderLon: attGpsData ? attGpsData.longitude : null,
+      summary: handoverData.summary,
+      issues: handoverData.issues,
+      notes: handoverData.notes || '',
+      status: 'pending'
+    };
+
+    const saved = db.saveHandover(newHandover);
+    if (saved) {
+      showToast("✅ Form Serah Terima Shift berhasil dikirim!", "success");
+      setHandovers(db.getHandovers());
+      setIsHandoverSent(true);
+      setShowHandoverForm(false);
+      setHandoverData({ summary: '', issues: '', notes: '' });
+    } else {
+      showToast("Gagal mengirim form serah terima.", "error");
+    }
+  };
+
+  const handleReceiveShiftHandover = (e) => {
+    e.preventDefault();
+    if (!activeHandoverToReceive) return;
+    if (!handoverReceiveStation) {
+      showToast("Harap pilih stasiun lokasi serah terima!", "error");
+      return;
+    }
+
+    const targetGeo = getTargetGeofence(currentUser.jobdesk, attShift, settings, handoverReceiveStation, stationCoords);
+    if (settings.enableGeofence && attGpsData && attGpsData.latitude) {
+      const dist = calculateDistance(attGpsData.latitude, attGpsData.longitude, targetGeo.lat, targetGeo.lon);
+      if (dist !== null && dist > targetGeo.radius) {
+        showToast(`⚠️ Lokasi Anda terlalu jauh dari ${handoverReceiveStation} (${dist.toFixed(0)}m > ${targetGeo.radius}m).`, "error");
+        return;
+      }
+    }
+
+    const updated = {
+      ...activeHandoverToReceive,
+      receiverName: currentUser.name,
+      receiverStation: handoverReceiveStation,
+      receiverLat: attGpsData ? attGpsData.latitude : null,
+      receiverLon: attGpsData ? attGpsData.longitude : null,
+      receivedAt: new Date().toISOString(),
+      status: 'received'
+    };
+
+    const saved = db.updateHandover(updated);
+    if (saved) {
+      showToast("✅ Serah Terima Pekerjaan Shift Berhasil Diterima!", "success");
+      setHandovers(db.getHandovers());
+      setShowHandoverReceive(false);
+      setActiveHandoverToReceive(null);
+    } else {
+      showToast("Gagal mengonfirmasi serah terima.", "error");
+    }
+  };
+
+  const handleSendPiketHandover = (e) => {
+    e.preventDefault();
+    if (!handoverData.summary.trim()) {
+      showToast("Harap isi Ringkasan Pekerjaan Piket!", "error");
+      return;
+    }
+
+    const newHandover = {
+      type: 'piket',
+      jobdesk: currentUser.jobdesk || 'suhu',
+      senderName: currentUser.name,
+      senderStation: attStation || 'Stasiun Utama',
+      senderLat: attGpsData ? attGpsData.latitude : null,
+      senderLon: attGpsData ? attGpsData.longitude : null,
+      piketDate: new Date().toISOString().split('T')[0],
+      summary: handoverData.summary,
+      issues: handoverData.issues || '',
+      notes: handoverData.notes || '',
+      piketChecklist: piketChecklist,
+      senderFrom: 'piket',
+      status: 'pending'
+    };
+
+    const saved = db.saveHandover(newHandover);
+    if (saved) {
+      showToast("✅ Serah Terima Piket Berhasil Disimpan!", "success");
+      setHandovers(db.getHandovers());
+      setShowPiketForm(false);
+      setPiketPendingWarning(false);
+      setHandoverData({ summary: '', issues: '', notes: '' });
+      setPiketChecklist([]);
+    } else {
+      showToast("Gagal menyimpan serah terima piket.", "error");
+    }
+  };
+
+  const handleSendSpvHandover = (e) => {
+    e.preventDefault();
+    if (!handoverData.notes.trim()) {
+      showToast("Harap isi Catatan / Instruksi SPV!", "error");
+      return;
+    }
+
+    const newHandover = {
+      type: 'piket',
+      jobdesk: settingManageJobdesk || 'suhu',
+      senderName: `${currentUser.name} (Supervisor)`,
+      piketDate: spvTargetPiket === 'today' ? new Date().toISOString().split('T')[0] : new Date(Date.now() + 86400000).toISOString().split('T')[0],
+      summary: 'Instruksi / Catatan Tambahan dari Supervisor',
+      issues: handoverData.issues || '',
+      notes: handoverData.notes,
+      senderFrom: 'supervisor',
+      targetOfficer: spvTargetOfficer,
+      status: 'pending'
+    };
+
+    const saved = db.saveHandover(newHandover);
+    if (saved) {
+      showToast("✅ Catatan Supervisor Berhasil Dikirim ke Petugas Piket!", "success");
+      setHandovers(db.getHandovers());
+      setShowSpvHandoverForm(false);
+      setHandoverData({ summary: '', issues: '', notes: '' });
+    } else {
+      showToast("Gagal mengirim catatan.", "error");
     }
   };
 
@@ -1213,6 +1534,25 @@ export default function App() {
       setActLocations(db.getLocationsByJobdesk(settingManageJobdesk));
     }
     showToast("Lokasi berhasil dihapus.", "success");
+  };
+
+  const handleUpdateStationCoord = (stationName, field, value) => {
+    setStationCoords(prev => {
+      const current = prev[stationName] || { lat: -4.786256, lon: 119.614108, radius: 100 };
+      return {
+        ...prev,
+        [stationName]: {
+          ...current,
+          [field]: field === 'radius' ? parseInt(value, 10) || 100 : parseFloat(value) || 0
+        }
+      };
+    });
+  };
+
+  const handleSaveAllStationCoords = (e) => {
+    e.preventDefault();
+    db.saveAllStationCoords(stationCoords);
+    showToast("Koordinat stasiun kerja berhasil disimpan!", "success");
   };
 
   const handleAddUser = (e) => {
@@ -2207,6 +2547,61 @@ export default function App() {
                   ))}
                 </div>
               )}
+
+              {/* Panel SPV / Manager Serah Terima Bermasalah & Catatan Piket */}
+              <div className="glass-card" style={{ marginTop: '16px' }}>
+                <div className="flex-row-between" style={{ marginBottom: '10px' }}>
+                  <h3 className="section-title" style={{ marginBottom: 0 }}>
+                    <ClipboardList size={16} style={{ color: '#8b5cf6' }} />
+                    Serah Terima Pekerjaan (Handover)
+                  </h3>
+                  {['Supervisor', 'Manager', 'Administrator'].includes(role) && (
+                    <button className="btn btn-secondary" onClick={() => setShowSpvHandoverForm(true)} style={{ fontSize: '0.7rem', padding: '4px 10px', borderRadius: '6px' }}>
+                      📝 Kirim Catatan Piket
+                    </button>
+                  )}
+                </div>
+
+                {(() => {
+                  const overdueList = handovers.filter(h => {
+                    if (h.status !== 'pending') return false;
+                    const minsPassed = Math.floor((new Date() - new Date(h.sentAt)) / 60000);
+                    if (role === 'Supervisor') return minsPassed > 30 && (!h.jobdesk || h.jobdesk === jd);
+                    if (role === 'Manager') return minsPassed > 60;
+                    return minsPassed > 30;
+                  });
+
+                  if (overdueList.length === 0) {
+                    return (
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'center', padding: '12px' }}>
+                        ✅ Tidak ada serah terima pekerjaan yang bermasalah / terlambat.
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#ef4444' }}>
+                        ⚠️ Ada {overdueList.length} Serah Terima Belum Diterima (&gt;30-60 menit):
+                      </div>
+                      {overdueList.map((h, idx) => {
+                        const mins = Math.floor((new Date() - new Date(h.sentAt)) / 60000);
+                        return (
+                          <div key={idx} style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', padding: '10px', borderRadius: '8px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 'bold' }}>
+                              <span>{h.senderName} ({h.jobdesk})</span>
+                              <span style={{ color: '#ef4444' }}>Terlambat {mins} Menit</span>
+                            </div>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                              Shift: {h.shiftFrom || 'Piket'} → {h.shiftTo || 'Piket Besok'} | Ringkasan: {h.summary}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
           );
         })()}
@@ -2249,6 +2644,24 @@ export default function App() {
                       <option value="Shift 3">Shift 3 (22.30 - 07.30)</option>
                       <option value="Piket">Piket (07.30 - 16.30 / Jm'at 17.00)</option>
                       <option value="Lembur">Lembur</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* Station / Stasiun Kerja Selection */}
+                {attType === 'Check In' && (
+                  <div className="form-group">
+                    <label>Stasiun / Lokasi Kerja Saat Ini *</label>
+                    <select 
+                      className="form-control"
+                      value={attStation}
+                      onChange={(e) => setAttStation(e.target.value)}
+                      required
+                    >
+                      <option value="" disabled>Pilih Stasiun Kerja</option>
+                      {db.getLocationsByJobdesk(currentUser.jobdesk || 'suhu').map((loc, idx) => (
+                        <option key={idx} value={loc}>{loc}</option>
+                      ))}
                     </select>
                   </div>
                 )}
@@ -2379,7 +2792,7 @@ export default function App() {
                           {/* Geofence Distance Indicator */}
                           {(() => {
                             if (settings.enableGeofence && ['Check In', 'Check Out'].includes(attType)) {
-                              const target = getTargetGeofence(currentUser.jobdesk, attShift, settings);
+                              const target = getTargetGeofence(currentUser.jobdesk, attShift, settings, attStation, stationCoords);
                               const dist = calculateDistance(
                                 attGpsData.latitude,
                                 attGpsData.longitude,
@@ -2419,6 +2832,121 @@ export default function App() {
                   )}
                 </div>
 
+                {/* === PETA LEAFLET (OpenStreetMap) === */}
+                {settings.enableGeofence && ['Check In', 'Check Out'].includes(attType) && attGpsData && attGpsData.latitude && (() => {
+                  const target = getTargetGeofence(currentUser.jobdesk, attShift, settings, attStation, stationCoords);
+                  const dist = calculateDistance(attGpsData.latitude, attGpsData.longitude, target.lat, target.lon);
+                  const isWithin = dist !== null && dist <= target.radius;
+
+                  return (
+                    <div style={{ marginTop: '12px' }}>
+                      {/* Map Container */}
+                      <div 
+                        ref={(el) => {
+                          attMapContainerRef.current = el;
+                          // Initialize/update Leaflet map
+                          if (el && typeof window !== 'undefined' && window.L) {
+                            // Clean up existing map
+                            if (attMapRef.current) {
+                              attMapRef.current.remove();
+                              attMapRef.current = null;
+                            }
+                            
+                            const L = window.L;
+                            const map = L.map(el, { 
+                              zoomControl: true, 
+                              attributionControl: true,
+                              dragging: true,
+                              scrollWheelZoom: false
+                            });
+                            
+                            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                              attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+                              maxZoom: 19
+                            }).addTo(map);
+
+                            // Blue marker — lokasi karyawan
+                            const employeeIcon = L.divIcon({
+                              html: '<div style="width:14px;height:14px;background:#3b82f6;border-radius:50%;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3)"></div>',
+                              iconSize: [14, 14],
+                              iconAnchor: [7, 7],
+                              className: ''
+                            });
+                            L.marker([attGpsData.latitude, attGpsData.longitude], { icon: employeeIcon })
+                              .addTo(map)
+                              .bindPopup(`<b>📍 Lokasi Anda</b><br>Akurasi: ±${attGpsData.accuracy}m`);
+
+                            // Red/Green circle — geofence radius area kerja
+                            const circleColor = isWithin ? '#10b981' : '#ef4444';
+                            L.circle([target.lat, target.lon], {
+                              radius: target.radius,
+                              color: circleColor,
+                              fillColor: circleColor,
+                              fillOpacity: 0.15,
+                              weight: 2
+                            }).addTo(map);
+
+                            // Red pin — lokasi area kerja
+                            const workIcon = L.divIcon({
+                              html: '<div style="width:12px;height:12px;background:#ef4444;border-radius:50%;border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3)"></div>',
+                              iconSize: [12, 12],
+                              iconAnchor: [6, 6],
+                              className: ''
+                            });
+                            L.marker([target.lat, target.lon], { icon: workIcon })
+                              .addTo(map)
+                              .bindPopup(`<b>🏭 ${target.label}</b><br>Radius: ${target.radius}m`);
+
+                            // Fit bounds to show both markers
+                            const bounds = L.latLngBounds(
+                              [attGpsData.latitude, attGpsData.longitude],
+                              [target.lat, target.lon]
+                            ).pad(0.3);
+                            map.fitBounds(bounds, { maxZoom: 17 });
+
+                            attMapRef.current = map;
+
+                            // Fix map rendering after DOM paint
+                            setTimeout(() => map.invalidateSize(), 200);
+                          }
+                        }}
+                        style={{ 
+                          width: '100%', 
+                          height: '200px', 
+                          borderRadius: '12px', 
+                          overflow: 'hidden',
+                          border: '1px solid var(--card-border)',
+                          background: '#e5e7eb'
+                        }}
+                      />
+                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px', textAlign: 'center' }}>
+                        🔵 Lokasi Anda &nbsp; | &nbsp; 🔴 Area Kerja: {target.label} &nbsp; | &nbsp; Jarak: {dist !== null ? dist.toFixed(0) : '?'}m
+                      </div>
+
+                      {/* WARNING POPUP — Di Luar Radius */}
+                      {!isWithin && dist !== null && (
+                        <div style={{ 
+                          marginTop: '10px', 
+                          padding: '14px', 
+                          borderRadius: '12px', 
+                          background: 'rgba(239,68,68,0.08)', 
+                          border: '1px solid rgba(239,68,68,0.25)',
+                          textAlign: 'center'
+                        }}>
+                          <div style={{ fontSize: '2.5rem', marginBottom: '6px' }}>⚠️</div>
+                          <div style={{ fontSize: '0.85rem', fontWeight: 'bold', color: '#ef4444' }}>
+                            Jarak Anda dengan Lokasi Kerja Terlalu Jauh!
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                            Anda berada <strong>{dist.toFixed(0)} meter</strong> dari area <strong>{target.label}</strong> (Batas: {target.radius}m).
+                            <br />Pastikan Anda berada di lokasi kerja yang benar sebelum melakukan absensi.
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* Notes/Keterangan Field for Sakit/Izin/Cuti */}
                 {!['Check In', 'Check Out'].includes(attType) && (
                   <div className="form-group" style={{ marginTop: '12px' }}>
@@ -2435,8 +2963,36 @@ export default function App() {
                   </div>
                 )}
 
+                {/* Upload Surat Dokter / Eviden khusus Sakit */}
+                {attType === 'Sakit' && (
+                  <div className="form-group" style={{ marginTop: '12px' }}>
+                    <label>Unggah Surat Dokter / Bukti Sakit (Opsional)</label>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '6px' }}>
+                      {attImage ? (
+                        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                          <img src={attImage} alt="Surat Sakit Preview" style={{ width: '70px', height: '70px', borderRadius: '8px', objectFit: 'cover', border: '1px solid var(--card-border)' }} />
+                          <button type="button" className="btn btn-secondary" onClick={() => setAttImage(null)} style={{ padding: '4px 8px', fontSize: '0.7rem' }}>
+                            Hapus Foto
+                          </button>
+                        </div>
+                      ) : (
+                        <button type="button" className="btn btn-secondary" onClick={() => attFileInputRef.current.click()} style={{ fontSize: '0.75rem', padding: '8px 12px' }}>
+                          <ImageIcon size={14} /> Pilih Foto Surat Dokter
+                        </button>
+                      )}
+                      <input 
+                        type="file" 
+                        ref={attFileInputRef} 
+                        style={{ display: 'none' }} 
+                        accept="image/*" 
+                        onChange={handleAttFileUpload} 
+                      />
+                    </div>
+                  </div>
+                )}
+
                 {(() => {
-                  const target = getTargetGeofence(currentUser.jobdesk, attShift, settings);
+                  const target = getTargetGeofence(currentUser.jobdesk, attShift, settings, attStation, stationCoords);
                   const isGeofenceBlocked = 
                     settings.enableGeofence && 
                     ['Check In', 'Check Out'].includes(attType) && 
@@ -2466,7 +3022,7 @@ export default function App() {
                         border: 'none',
                         cursor: isGeofenceBlocked ? 'not-allowed' : 'pointer'
                       }}
-                      disabled={!attImage || attGpsLoading || isGeofenceBlocked}
+                      disabled={attGpsLoading || isGeofenceBlocked}
                     >
                       {isGeofenceBlocked ? '⚠️ Di Luar Radius Absensi' : `Kirim Absensi ${attType}`}
                     </button>
@@ -2486,38 +3042,54 @@ export default function App() {
                 <>
                   <button 
                     className={`btn`} 
-                    style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.75rem', background: historySubTab === 'suhu' ? 'var(--bg-tertiary)' : 'transparent', color: historySubTab === 'suhu' ? '#fff' : 'var(--text-muted)' }}
+                    style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.7rem', background: historySubTab === 'suhu' ? 'var(--bg-tertiary)' : 'transparent', color: historySubTab === 'suhu' ? '#fff' : 'var(--text-muted)' }}
                     onClick={() => setHistorySubTab('suhu')}
                   >
-                    <Activity size={14} style={{ marginRight: '4px', display: 'inline' }} />
-                    Suhu Alat ({filteredReports.length})
+                    <Activity size={12} style={{ marginRight: '3px', display: 'inline' }} />
+                    Suhu ({filteredReports.length})
                   </button>
                   <button 
                     className={`btn`} 
-                    style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.75rem', background: historySubTab === 'absensi' ? 'var(--bg-tertiary)' : 'transparent', color: historySubTab === 'absensi' ? '#fff' : 'var(--text-muted)' }}
+                    style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.7rem', background: historySubTab === 'absensi' ? 'var(--bg-tertiary)' : 'transparent', color: historySubTab === 'absensi' ? '#fff' : 'var(--text-muted)' }}
                     onClick={() => setHistorySubTab('absensi')}
                   >
-                    <UserCheck size={14} style={{ marginRight: '4px', display: 'inline' }} />
-                    Absensi Petugas ({filteredAttendance.length})
+                    <UserCheck size={12} style={{ marginRight: '3px', display: 'inline' }} />
+                    Absen ({filteredAttendance.length})
+                  </button>
+                  <button 
+                    className={`btn`} 
+                    style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.7rem', background: historySubTab === 'serah_terima' ? 'var(--bg-tertiary)' : 'transparent', color: historySubTab === 'serah_terima' ? '#fff' : 'var(--text-muted)' }}
+                    onClick={() => setHistorySubTab('serah_terima')}
+                  >
+                    <ClipboardList size={12} style={{ marginRight: '3px', display: 'inline' }} />
+                    Handover ({handovers.length})
                   </button>
                 </>
               ) : (
                 <>
                   <button 
                     className={`btn`} 
-                    style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.75rem', background: historyActSubTab === 'kegiatan' ? 'var(--bg-tertiary)' : 'transparent', color: historyActSubTab === 'kegiatan' ? '#fff' : 'var(--text-muted)' }}
+                    style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.7rem', background: historyActSubTab === 'kegiatan' ? 'var(--bg-tertiary)' : 'transparent', color: historyActSubTab === 'kegiatan' ? '#fff' : 'var(--text-muted)' }}
                     onClick={() => setHistoryActSubTab('kegiatan')}
                   >
-                    <ClipboardList size={14} style={{ marginRight: '4px', display: 'inline' }} />
+                    <ClipboardList size={12} style={{ marginRight: '3px', display: 'inline' }} />
                     Kegiatan ({filteredActivities.length})
                   </button>
                   <button 
                     className={`btn`} 
-                    style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.75rem', background: historyActSubTab === 'absensi' ? 'var(--bg-tertiary)' : 'transparent', color: historyActSubTab === 'absensi' ? '#fff' : 'var(--text-muted)' }}
+                    style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.7rem', background: historyActSubTab === 'absensi' ? 'var(--bg-tertiary)' : 'transparent', color: historyActSubTab === 'absensi' ? '#fff' : 'var(--text-muted)' }}
                     onClick={() => setHistoryActSubTab('absensi')}
                   >
-                    <UserCheck size={14} style={{ marginRight: '4px', display: 'inline' }} />
-                    Absensi Petugas ({filteredAttendance.length})
+                    <UserCheck size={12} style={{ marginRight: '3px', display: 'inline' }} />
+                    Absen ({filteredAttendance.length})
+                  </button>
+                  <button 
+                    className={`btn`} 
+                    style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.7rem', background: historyActSubTab === 'serah_terima' ? 'var(--bg-tertiary)' : 'transparent', color: historyActSubTab === 'serah_terima' ? '#fff' : 'var(--text-muted)' }}
+                    onClick={() => { setHistoryActSubTab('serah_terima'); setHistorySubTab('serah_terima'); }}
+                  >
+                    <ClipboardList size={12} style={{ marginRight: '3px', display: 'inline' }} />
+                    Handover ({handovers.length})
                   </button>
                 </>
               )}
@@ -2855,6 +3427,63 @@ export default function App() {
                         </div>
                       );
                     })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Sub-Tab 4: Serah Terima Pekerjaan */}
+            {(historySubTab === 'serah_terima' || historyActSubTab === 'serah_terima') && (
+              <div>
+                {handovers.length === 0 ? (
+                  <div className="glass-card" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
+                    <ClipboardList size={36} style={{ margin: '0 auto 12px', opacity: 0.5 }} />
+                    <p style={{ fontSize: '0.85rem' }}>Belum ada riwayat serah terima pekerjaan.</p>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {handovers.map((h, idx) => (
+                      <div key={idx} className="glass-card" style={{ padding: '14px', marginBottom: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                          <span className="status-badge" style={{ 
+                            background: h.status === 'received' ? 'rgba(16,185,129,0.15)' : h.status === 'pending' ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)',
+                            color: h.status === 'received' ? '#10b981' : h.status === 'pending' ? '#f59e0b' : '#ef4444'
+                          }}>
+                            {h.type === 'shift' ? '🔄 Shift Handover' : '📌 Piket Handover'} — {h.status === 'received' ? '✅ Diterima' : '⏳ Pending'}
+                          </span>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                            {new Date(h.sentAt).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' })}
+                          </span>
+                        </div>
+
+                        <div style={{ fontSize: '0.8rem', fontWeight: 'bold', marginBottom: '4px' }}>
+                          Pemberi: {h.senderName} ({h.jobdesk || 'suhu'}) {h.senderStation ? `— Stasiun: ${h.senderStation}` : ''}
+                        </div>
+
+                        {h.receiverName && (
+                          <div style={{ fontSize: '0.75rem', color: '#10b981', marginBottom: '8px' }}>
+                            Penerima: <strong>{h.receiverName}</strong> {h.receiverStation ? `(${h.receiverStation})` : ''} 
+                            &nbsp;• {new Date(h.receivedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        )}
+
+                        <div style={{ background: 'rgba(255,255,255,0.02)', padding: '8px 10px', borderRadius: '6px', fontSize: '0.75rem', marginTop: '6px' }}>
+                          <strong>Ringkasan:</strong> {h.summary}
+                        </div>
+
+                        {h.issues && (
+                          <div style={{ background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)', padding: '8px 10px', borderRadius: '6px', fontSize: '0.75rem', marginTop: '6px', color: 'var(--text-primary)' }}>
+                            <strong style={{ color: '#ef4444' }}>⚠️ Masalah Tindak Lanjut:</strong> {h.issues}
+                          </div>
+                        )}
+
+                        {h.notes && (
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '6px' }}>
+                            <strong>Catatan:</strong> {h.notes}
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -3227,6 +3856,103 @@ export default function App() {
                 ))}
               </div>
             </div>
+
+            {/* Koordinat Geofence Per Stasiun Kerja (Opsi B) */}
+            <form onSubmit={handleSaveAllStationCoords} className="glass-card">
+              <div className="flex-row-between" style={{ marginBottom: '10px' }}>
+                <h3 className="section-title" style={{ marginBottom: 0 }}>
+                  <MapPin size={16} style={{ color: '#10b981' }} />
+                  Koordinat Geofence Per Stasiun (Opsi B)
+                </h3>
+                <button type="submit" className="btn btn-primary" style={{ padding: '6px 14px', fontSize: '0.75rem', height: 'auto' }}>
+                  Simpan Semua
+                </button>
+              </div>
+
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                Atur koordinat lintang/bujur dan radius pagar virtual (geofence) untuk masing-masing stasiun kerja secara individual.
+              </p>
+
+              {/* Selector Jobdesk */}
+              <div className="form-group" style={{ marginBottom: '14px' }}>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {['suhu', 'inspeksi', 'analis'].map(jd => (
+                    <button
+                      key={jd}
+                      type="button"
+                      className="btn"
+                      onClick={() => setSettingManageJobdesk(jd)}
+                      style={{
+                        flex: 1,
+                        padding: '6px 8px',
+                        fontSize: '0.7rem',
+                        borderRadius: '6px',
+                        background: settingManageJobdesk === jd ? '#10b981' : 'var(--bg-tertiary)',
+                        color: settingManageJobdesk === jd ? '#fff' : 'var(--text-muted)',
+                        border: 'none',
+                        transition: 'all 0.2s ease'
+                      }}
+                    >
+                      {jd.charAt(0).toUpperCase() + jd.slice(1)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '420px', overflowY: 'auto', paddingRight: '4px' }}>
+                {db.getLocationsByJobdesk(settingManageJobdesk).filter(loc => loc !== 'Lainnya...').map((loc, idx) => {
+                  const coord = stationCoords[loc] || { lat: -4.786256, lon: 119.614108, radius: 100 };
+                  return (
+                    <div key={idx} style={{ background: 'rgba(255,255,255,0.02)', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--card-border)' }}>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '6px' }}>
+                        📍 {loc}
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1.2fr 0.8fr', gap: '6px' }}>
+                        <div>
+                          <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Latitude</label>
+                          <input 
+                            type="number" 
+                            step="0.000001" 
+                            className="form-control" 
+                            style={{ fontSize: '0.72rem', padding: '4px 6px' }}
+                            value={coord.lat}
+                            onChange={(e) => handleUpdateStationCoord(loc, 'lat', e.target.value)}
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Longitude</label>
+                          <input 
+                            type="number" 
+                            step="0.000001" 
+                            className="form-control" 
+                            style={{ fontSize: '0.72rem', padding: '4px 6px' }}
+                            value={coord.lon}
+                            onChange={(e) => handleUpdateStationCoord(loc, 'lon', e.target.value)}
+                            required
+                          />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Radius (m)</label>
+                          <input 
+                            type="number" 
+                            className="form-control" 
+                            style={{ fontSize: '0.72rem', padding: '4px 6px' }}
+                            value={coord.radius || 100}
+                            onChange={(e) => handleUpdateStationCoord(loc, 'radius', e.target.value)}
+                            required
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '12px' }}>
+                Simpan Semua Koordinat Stasiun
+              </button>
+            </form>
 
             {/* Cloud Sync Config (Supabase) */}
             <div className="glass-card">
@@ -3836,6 +4562,308 @@ ALTER TABLE activities DISABLE ROW LEVEL SECURITY;`}
                 <input type="text" required className="form-control" value={resetNewPassword} onChange={e => setResetNewPassword(e.target.value)} minLength={6} />
               </div>
               <button type="submit" className="btn btn-primary" style={{ marginTop: '8px', background: 'var(--danger)' }}>Reset Sandi</button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- HANDOVER SHIFT SENDER MODAL ----------------- */}
+      {showHandoverForm && (
+        <div className="modal-overlay" onClick={() => setShowHandoverForm(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header" style={{ borderBottom: '1px solid var(--card-border)', paddingBottom: '10px' }}>
+              <div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: '700', color: '#3b82f6', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <ClipboardList size={18} /> Form Serah Terima Pekerjaan Shift
+                </h3>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  Anda ditunjuk untuk menyerahkan tugas shift ini ke shift berikutnya
+                </span>
+              </div>
+              <button className="modal-close" onClick={() => setShowHandoverForm(false)}>
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSendShiftHandover} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
+              <div className="form-group">
+                <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>1. Ringkasan Pekerjaan Yang Dilakukan *</label>
+                <textarea 
+                  className="form-control" 
+                  rows="3" 
+                  placeholder="Ringkasan tugas, aktivitas alat/inspeksi selama shift ini..."
+                  value={handoverData.summary}
+                  onChange={e => setHandoverData({ ...handoverData, summary: e.target.value })}
+                  required 
+                />
+              </div>
+
+              <div className="form-group">
+                <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>2. Masalah Yang Harus Ditindaklanjuti Shift Berikutnya *</label>
+                <textarea 
+                  className="form-control" 
+                  rows="3" 
+                  placeholder="Kondisi alat/lokasi abnormal, pending task, perhatian khusus..."
+                  value={handoverData.issues}
+                  onChange={e => setHandoverData({ ...handoverData, issues: e.target.value })}
+                  required 
+                />
+              </div>
+
+              <div className="form-group">
+                <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>3. Catatan Tambahan (Opsional)</label>
+                <textarea 
+                  className="form-control" 
+                  rows="2" 
+                  placeholder="Catatan tambahan untuk shift berikutnya..."
+                  value={handoverData.notes}
+                  onChange={e => setHandoverData({ ...handoverData, notes: e.target.value })}
+                />
+              </div>
+
+              <div style={{ background: 'var(--bg-tertiary)', padding: '10px', borderRadius: '8px', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                📍 Posisi & Waktu akan dicatat otomatis secara presisi via GPS.
+              </div>
+
+              <button type="submit" className="btn btn-primary" style={{ background: 'linear-gradient(135deg, #3b82f6, #2563eb)', border: 'none', padding: '10px' }}>
+                Kirim Form Serah Terima
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- HANDOVER SHIFT RECEIVER MODAL ----------------- */}
+      {showHandoverReceive && activeHandoverToReceive && (
+        <div className="modal-overlay" onClick={() => setShowHandoverReceive(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header" style={{ borderBottom: '1px solid var(--card-border)', paddingBottom: '10px' }}>
+              <div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: '700', color: '#10b981', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <CheckSquare size={18} /> Penerimaan Serah Terima Pekerjaan Shift
+                </h3>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  Dari: <strong>{activeHandoverToReceive.senderName}</strong> ({activeHandoverToReceive.shiftFrom})
+                </span>
+              </div>
+              <button className="modal-close" onClick={() => setShowHandoverReceive(false)}>
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleReceiveShiftHandover} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
+              <div className="glass-card" style={{ padding: '12px', marginBottom: 0, background: 'rgba(255,255,255,0.02)' }}>
+                <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', display: 'block', fontWeight: 'bold' }}>1. RINGKASAN PEKERJAAN SHIFT SEBELUMNYA</span>
+                <p style={{ fontSize: '0.8rem', marginTop: '4px', whiteSpace: 'pre-wrap' }}>{activeHandoverToReceive.summary}</p>
+              </div>
+
+              <div className="glass-card" style={{ padding: '12px', marginBottom: 0, background: 'rgba(239, 68, 68, 0.05)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                <span style={{ fontSize: '0.65rem', color: '#ef4444', display: 'block', fontWeight: 'bold' }}>2. MASALAH TINDAK LANJUT</span>
+                <p style={{ fontSize: '0.8rem', marginTop: '4px', whiteSpace: 'pre-wrap', color: 'var(--text-primary)' }}>{activeHandoverToReceive.issues}</p>
+              </div>
+
+              {activeHandoverToReceive.notes && (
+                <div className="glass-card" style={{ padding: '12px', marginBottom: 0, background: 'rgba(255,255,255,0.02)' }}>
+                  <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', display: 'block', fontWeight: 'bold' }}>3. CATATAN TAMBAHAN</span>
+                  <p style={{ fontSize: '0.8rem', marginTop: '4px', whiteSpace: 'pre-wrap' }}>{activeHandoverToReceive.notes}</p>
+                </div>
+              )}
+
+              <div className="form-group" style={{ marginTop: '8px' }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Pilih Stasiun Lokasi Serah Terima Saat Ini *</label>
+                <select 
+                  className="form-control" 
+                  value={handoverReceiveStation} 
+                  onChange={e => setHandoverReceiveStation(e.target.value)} 
+                  required
+                >
+                  <option value="" disabled>Pilih Stasiun Kerja Penerimaan</option>
+                  {db.getLocationsByJobdesk(currentUser.jobdesk || 'suhu').map((loc, idx) => (
+                    <option key={idx} value={loc}>{loc}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ background: 'var(--bg-tertiary)', padding: '10px', borderRadius: '8px', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                📍 Lokasi penerimaan akan di-lock secara presisi menggunakan GPS di stasiun yang Anda pilih.
+              </div>
+
+              <button type="submit" className="btn btn-primary" style={{ background: 'linear-gradient(135deg, #10b981, #059669)', border: 'none', padding: '10px' }}>
+                ✅ Terima & Konfirmasi Serah Terima
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- PIKET HANDOVER FORM MODAL ----------------- */}
+      {showPiketForm && (
+        <div className="modal-overlay" onClick={() => setShowPiketForm(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header" style={{ borderBottom: '1px solid var(--card-border)', paddingBottom: '10px' }}>
+              <div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: '700', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <ClipboardList size={18} /> Form Serah Terima Piket / Lembur
+                </h3>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  Isi ringkasan pekerjaan & catatan untuk piket berikutnya saat Check Out
+                </span>
+              </div>
+              <button className="modal-close" onClick={() => setShowPiketForm(false)}>
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSendPiketHandover} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
+              <div className="form-group">
+                <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>1. Ringkasan Pekerjaan Hari Ini *</label>
+                <textarea 
+                  className="form-control" 
+                  rows="3" 
+                  placeholder="Ringkasan tugas & penanganan selama piket..."
+                  value={handoverData.summary}
+                  onChange={e => setHandoverData({ ...handoverData, summary: e.target.value })}
+                  required 
+                />
+              </div>
+
+              <div className="form-group">
+                <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>2. Masalah Yang Harus Ditindaklanjuti Piket Besok</label>
+                <textarea 
+                  className="form-control" 
+                  rows="2" 
+                  placeholder="Perhatian khusus untuk piket besok..."
+                  value={handoverData.issues}
+                  onChange={e => setHandoverData({ ...handoverData, issues: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>3. Catatan Untuk Supervisor / Analis Lain</label>
+                <textarea 
+                  className="form-control" 
+                  rows="2" 
+                  placeholder="Catatan umum..."
+                  value={handoverData.notes}
+                  onChange={e => setHandoverData({ ...handoverData, notes: e.target.value })}
+                />
+              </div>
+
+              <button type="submit" className="btn btn-primary" style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)', border: 'none', padding: '10px' }}>
+                Simpan & Kirim Serah Terima Piket
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- PIKET REMINDER MODAL ----------------- */}
+      {showPiketReminder && piketRemindersToView.length > 0 && (
+        <div className="modal-overlay" onClick={() => setShowPiketReminder(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header" style={{ borderBottom: '1px solid var(--card-border)', paddingBottom: '10px' }}>
+              <div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: '700', color: '#6366f1', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Info size={18} /> Catatan / Reminder Serah Terima Piket
+                </h3>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  Ada catatan serah terima dari piket sebelumnya atau Supervisor untuk Anda
+                </span>
+              </div>
+              <button className="modal-close" onClick={() => setShowPiketReminder(false)}>
+                <X size={16} />
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px', maxHeight: '360px', overflowY: 'auto' }}>
+              {piketRemindersToView.map((rem, idx) => (
+                <div key={idx} className="glass-card" style={{ padding: '12px', marginBottom: 0, border: '1px solid rgba(99,102,241,0.3)', background: 'rgba(99,102,241,0.05)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                    <span>Dari: <strong>{rem.senderName}</strong></span>
+                    <span>{new Date(rem.sentAt).toLocaleDateString('id-ID')}</span>
+                  </div>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#6366f1' }}>{rem.summary}</div>
+                  {rem.issues && (
+                    <div style={{ fontSize: '0.75rem', marginTop: '4px', color: '#ef4444' }}>
+                      <strong>⚠️ Masalah:</strong> {rem.issues}
+                    </div>
+                  )}
+                  {rem.notes && (
+                    <div style={{ fontSize: '0.75rem', marginTop: '4px', color: 'var(--text-secondary)' }}>
+                      <strong>📝 Catatan:</strong> {rem.notes}
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              <button 
+                className="btn btn-primary" 
+                style={{ background: 'linear-gradient(135deg, #6366f1, #4f46e5)', border: 'none', marginTop: '8px' }}
+                onClick={() => {
+                  const updatedHandovers = handovers.map(h => {
+                    if (piketRemindersToView.some(r => r.id === h.id)) {
+                      const readList = h.readBy || [];
+                      if (!readList.includes(currentUser.name)) readList.push(currentUser.name);
+                      const updated = { ...h, readBy: readList };
+                      db.updateHandover(updated);
+                      return updated;
+                    }
+                    return h;
+                  });
+                  setHandovers(updatedHandovers);
+                  setShowPiketReminder(false);
+                  setPiketRemindersToView([]);
+                }}
+              >
+                ✅ Saya Sudah Membaca Catatan Ini
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- SPV HANDOVER NOTE MODAL ----------------- */}
+      {showSpvHandoverForm && (
+        <div className="modal-overlay" onClick={() => setShowSpvHandoverForm(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header" style={{ borderBottom: '1px solid var(--card-border)', paddingBottom: '10px' }}>
+              <div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: '700', color: '#8b5cf6', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <FileText size={18} /> Kirim Catatan / Instruksi Supervisor
+                </h3>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  Kirim pesan atau instruksi khusus untuk petugas piket
+                </span>
+              </div>
+              <button className="modal-close" onClick={() => setShowSpvHandoverForm(false)}>
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSendSpvHandover} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '12px' }}>
+              <div className="form-group">
+                <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Target Piket</label>
+                <select className="form-control" value={spvTargetPiket} onChange={e => setSpvTargetPiket(e.target.value)}>
+                  <option value="today">Piket Hari Ini</option>
+                  <option value="tomorrow">Piket Besok</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Catatan / Instruksi Supervisor *</label>
+                <textarea 
+                  className="form-control" 
+                  rows="3" 
+                  placeholder="Tuliskan instruksi kerja atau perhatian khusus untuk personil piket..."
+                  value={handoverData.notes}
+                  onChange={e => setHandoverData({ ...handoverData, notes: e.target.value })}
+                  required 
+                />
+              </div>
+
+              <button type="submit" className="btn btn-primary" style={{ background: 'linear-gradient(135deg, #8b5cf6, #7c3aed)', border: 'none', padding: '10px' }}>
+                Kirim Catatan Ke Piket
+              </button>
             </form>
           </div>
         </div>
