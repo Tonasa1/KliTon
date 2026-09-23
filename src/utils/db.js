@@ -1728,13 +1728,11 @@ export const db = {
           localStorage.setItem(LOCATIONS_KEY, JSON.stringify(cloudData.locations));
         }
         if (cloudData.stationCoords && typeof cloudData.stationCoords === 'object') {
-          const _existingCoords = JSON.parse(localStorage.getItem(STATION_COORDS_KEY) || '{}');
-          const _mergedCoords = { ...DEFAULT_STATION_COORDS, ..._existingCoords, ...cloudData.stationCoords };
+          const _mergedCoords = { ...DEFAULT_STATION_COORDS, ...cloudData.stationCoords };
           localStorage.setItem(STATION_COORDS_KEY, JSON.stringify(_mergedCoords));
         }
         if (cloudData.settings && typeof cloudData.settings === 'object') {
-          const _existingSettings = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
-          const _mergedSettings = { ...DEFAULT_SETTINGS, ..._existingSettings, ...cloudData.settings };
+          const _mergedSettings = { ...DEFAULT_SETTINGS, ...cloudData.settings };
           localStorage.setItem(SETTINGS_KEY, JSON.stringify(_mergedSettings));
         }
         if (cloudData.deviceLogs && Array.isArray(cloudData.deviceLogs)) {
