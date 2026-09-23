@@ -537,7 +537,7 @@ export const db = {
     if (!url || !key) return;
     try {
       const headers = { 'apikey': key, 'Authorization': `Bearer ${key}` };
-      await fetch(`${url}/rest/v1/${table}?id=neq.0`, { method: 'DELETE', headers });
+      await fetch(`${url}/rest/v1/${table}?id=not.is.null`, { method: 'DELETE', headers });
     } catch (e) {
       console.error(`Failed to clear cloud table ${table}:`, e);
     }
@@ -559,6 +559,16 @@ export const db = {
     try {
       localStorage.setItem(ACTIVITIES_KEY, JSON.stringify([]));
       this.clearTableFromCloud('activities');
+      return true;
+    } catch (e) {
+      return false;
+    }
+  },
+
+  clearAllHandovers() {
+    try {
+      localStorage.setItem(HANDOVERS_KEY, JSON.stringify([]));
+      this.clearTableFromCloud('handovers');
       return true;
     } catch (e) {
       return false;
