@@ -931,7 +931,7 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
-  // --- GEOLOCATION & FAKE GPS DETECTION (ULTRA-FAST MULTI-TIER RECOVERY) ---
+  // --- GEOLOCATION & FAKE GPS DETECTION (HIGH ACCURACY HARDWARE GPS LOCK) ---
   const lockGeolocation = () => {
     if (!navigator.geolocation) {
       showToast("Geolocation tidak didukung oleh perangkat ini.", "error");
@@ -940,7 +940,7 @@ export default function App() {
 
     setAttGpsLoading(true);
 
-    const applyPosition = (position, isFast = false) => {
+    const applyPosition = (position, isHighAcc = true) => {
       const lat = position.coords.latitude;
       const lon = position.coords.longitude;
       const acc = position.coords.accuracy || 10;
@@ -960,26 +960,28 @@ export default function App() {
       setAttGpsLoading(false);
       if (isFake) {
         showToast("Peringatan: Terdeteksi kemungkinan manipulasi lokasi (Fake GPS)!", "error");
+      } else if (acc > 150) {
+        showToast(`⚠️ Sinyal GPS seluler (Akurasi: ±${acc.toFixed(0)}m). Tekan 'Lock Ulang' di area terbuka untuk GPS presisi.`, "error");
       } else {
-        showToast(isFast ? "Lokasi GPS berhasil dikunci dengan cepat." : "Lokasi GPS berhasil dikunci secara akurat.", "success");
+        showToast(`Lokasi GPS presisi terkunci secara akurat (Akurasi: ±${acc.toFixed(1)}m).`, "success");
       }
     };
 
-    // Attempt 1: Extremely fast lookup using cellular/WiFi/cached location (2.5s timeout, 60s maxAge)
+    // Attempt 1: High Accuracy Hardware GPS Chip Lock (10s timeout, fresh fix)
     navigator.geolocation.getCurrentPosition(
       (pos) => applyPosition(pos, true),
-      (errFast) => {
-        console.warn("Fast GPS lookup failed or timed out, trying standard high accuracy...", errFast);
-        // Attempt 2: Standard GPS lookup
+      (err1) => {
+        console.warn("Hardware GPS lock timed out or failed, falling back to network triangulation...", err1);
+        // Attempt 2: Network / Cellular Fallback
         navigator.geolocation.getCurrentPosition(
           (pos) => applyPosition(pos, false),
           (err2) => {
             console.error("GPS Fallback Error:", err2);
-            let errorMsg = "Gagal mengunci lokasi. Harap pastikan GPS & Akses Lokasi di HP Anda aktif.";
+            let errorMsg = "Gagal mengunci lokasi. Harap pastikan GPS Mode Presisi di HP Anda aktif.";
             if (err2.code === err2.PERMISSION_DENIED) {
-              errorMsg = "Akses lokasi ditolak. Harap izinkan akses lokasi di HP & Chrome.";
+              errorMsg = "Akses lokasi ditolak. Harap izinkan akses lokasi presisi di HP & Chrome.";
             } else if (err2.code === err2.TIMEOUT) {
-              errorMsg = "Pencarian GPS terlalu lama. Harap pastikan Lokasi/Wi-Fi HP aktif.";
+              errorMsg = "Pencarian GPS terlalu lama. Pastikan Anda berada di luar ruangan.";
             }
             showToast(errorMsg, "error");
             setAttGpsLoading(false);
@@ -991,10 +993,10 @@ export default function App() {
               error: err2.message
             });
           },
-          { enableHighAccuracy: false, timeout: 5000, maximumAge: 120000 }
+          { enableHighAccuracy: false, timeout: 6000, maximumAge: 30000 }
         );
       },
-      { enableHighAccuracy: false, timeout: 2500, maximumAge: 60000 }
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   };
 
@@ -1130,6 +1132,20 @@ export default function App() {
           radiusLimit: 0,
           message: 'Gagal melakukan absensi. Harap tekan tombol "Lock Ulang" lokasi GPS Anda terlebih dahulu.'
         });
+        return;
+      }
+
+      // Filter: Tolak absensi jika sinyal GPS sangat tidak akurat (> 250m, sinyal seluler kasar)
+      if (parseFloat(attGpsData.accuracy) > 250) {
+        setAttResultModal({
+          type: 'error',
+          title: '⚠️ AKURASI GPS KURANG PRESISI',
+          station: attStation || 'Stasiun Kerja',
+          distance: '0',
+          radiusLimit: 0,
+          message: `Absensi Ditolak!\nSinyal lokasi HP Anda saat ini kurang presisi (Akurasi ±${attGpsData.accuracy}m dari pemancar seluler).\n\nSilakan pastikan GPS HP dalam mode "Presisi Tinggi", berada di area terbuka luar ruangan, lalu tekan tombol "Lock Ulang".`
+        });
+        showToast(`⚠️ Absensi Ditolak: Sinyal GPS kurang presisi (±${attGpsData.accuracy}m). Tekan Lock Ulang.`, "error");
         return;
       }
       const target = getTargetGeofence(attJobdesk, attShift, settings, attStation, stationCoords);
