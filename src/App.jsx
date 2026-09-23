@@ -173,6 +173,7 @@ export default function App() {
   const [attShift, setAttShift] = useState('Day Shift');
   const [attStation, setAttStation] = useState('');
   const [stationCoords, setStationCoords] = useState(() => db.getStationCoords());
+  const [attResultModal, setAttResultModal] = useState(null); // { type: 'error' | 'success', title, message, station, distance, radiusLimit, officer, shift, time, status }
   const attMapRef = useRef(null); // Leaflet map instance
   const attMapContainerRef = useRef(null); // DOM div for map
   
@@ -930,7 +931,7 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
-  // --- GEOLOCATION & FAKE GPS DETECTION (WITH DUAL-TIER FALLBACK) ---
+  // --- GEOLOCATION & FAKE GPS DETECTION (ULTRA-FAST MULTI-TIER RECOVERY) ---
   const lockGeolocation = () => {
     if (!navigator.geolocation) {
       showToast("Geolocation tidak didukung oleh perangkat ini.", "error");
@@ -938,9 +939,8 @@ export default function App() {
     }
 
     setAttGpsLoading(true);
-    setAttGpsData(null);
 
-    const handleSuccess = (position) => {
+    const applyPosition = (position, isFast = false) => {
       const lat = position.coords.latitude;
       const lon = position.coords.longitude;
       const acc = position.coords.accuracy || 10;
@@ -959,44 +959,42 @@ export default function App() {
       
       setAttGpsLoading(false);
       if (isFake) {
-        showToast("Peringatan: Terdeteksi indikasi manipulasi lokasi (Fake GPS)!", "error");
+        showToast("Peringatan: Terdeteksi kemungkinan manipulasi lokasi (Fake GPS)!", "error");
       } else {
-        showToast("Lokasi GPS berhasil dikunci secara akurat.", "success");
+        showToast(isFast ? "Lokasi GPS berhasil dikunci dengan cepat." : "Lokasi GPS berhasil dikunci secara akurat.", "success");
       }
     };
 
-    const handleError = (error) => {
-      console.warn("GPS High Accuracy timed out or failed, switching to Network/Wi-Fi location...", error);
-      // Fallback to network/cellular/WiFi triangulation
-      navigator.geolocation.getCurrentPosition(
-        handleSuccess,
-        (err2) => {
-          console.error("GPS Fallback Error:", err2);
-          let errorMsg = "Gagal mendapatkan lokasi GPS. Harap aktifkan ikon Lokasi (GPS) di HP Anda.";
-          if (err2.code === err2.PERMISSION_DENIED) {
-            errorMsg = "Akses lokasi ditolak. Harap aktifkan Lokasi HP & izinkan lokasi Chrome.";
-          } else if (err2.code === err2.TIMEOUT) {
-            errorMsg = "Pencarian lokasi terlalu lama. Harap aktifkan Wi-Fi/GPS HP Anda.";
-          }
-          showToast(errorMsg, "error");
-          setAttGpsLoading(false);
-          setAttGpsData({
-            latitude: null,
-            longitude: null,
-            accuracy: null,
-            isFakeGps: false,
-            error: err2.message
-          });
-        },
-        { enableHighAccuracy: false, timeout: 15000, maximumAge: 30000 }
-      );
-    };
-
-    // Attempt 1: High accuracy GPS (8s timeout)
+    // Attempt 1: Extremely fast lookup using cellular/WiFi/cached location (2.5s timeout, 60s maxAge)
     navigator.geolocation.getCurrentPosition(
-      handleSuccess,
-      handleError,
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 5000 }
+      (pos) => applyPosition(pos, true),
+      (errFast) => {
+        console.warn("Fast GPS lookup failed or timed out, trying standard high accuracy...", errFast);
+        // Attempt 2: Standard GPS lookup
+        navigator.geolocation.getCurrentPosition(
+          (pos) => applyPosition(pos, false),
+          (err2) => {
+            console.error("GPS Fallback Error:", err2);
+            let errorMsg = "Gagal mengunci lokasi. Harap pastikan GPS & Akses Lokasi di HP Anda aktif.";
+            if (err2.code === err2.PERMISSION_DENIED) {
+              errorMsg = "Akses lokasi ditolak. Harap izinkan akses lokasi di HP & Chrome.";
+            } else if (err2.code === err2.TIMEOUT) {
+              errorMsg = "Pencarian GPS terlalu lama. Harap pastikan Lokasi/Wi-Fi HP aktif.";
+            }
+            showToast(errorMsg, "error");
+            setAttGpsLoading(false);
+            setAttGpsData({
+              latitude: null,
+              longitude: null,
+              accuracy: null,
+              isFakeGps: false,
+              error: err2.message
+            });
+          },
+          { enableHighAccuracy: false, timeout: 5000, maximumAge: 120000 }
+        );
+      },
+      { enableHighAccuracy: false, timeout: 2500, maximumAge: 60000 }
     );
   };
 
@@ -1118,6 +1116,36 @@ export default function App() {
       if (u && u.jobdesk) attJobdesk = u.jobdesk;
     }
 
+    // Geofence Distance Validation
+    if (settings.enableGeofence && ['Check In', 'Check Out'].includes(attType)) {
+      if (!attGpsData || !attGpsData.latitude) {
+        showToast("Harap kunci lokasi GPS terlebih dahulu!", "error");
+        setAttResultModal({
+          type: 'error',
+          title: '⚠️ LOKASI GPS BELUM TERKUNCI',
+          station: attStation || 'Stasiun Kerja',
+          distance: '0',
+          radiusLimit: 0,
+          message: 'Gagal melakukan absensi. Harap tekan tombol "Lock Ulang" lokasi GPS Anda terlebih dahulu.'
+        });
+        return;
+      }
+      const target = getTargetGeofence(attJobdesk, attShift, settings, attStation, stationCoords);
+      const dist = calculateDistance(attGpsData.latitude, attGpsData.longitude, target.lat, target.lon);
+      if (dist !== null && dist > target.radius) {
+        setAttResultModal({
+          type: 'error',
+          title: '⚠️ ABSENSI DITOLAK (DILUAR AREA)',
+          station: target.label || attStation || 'Stasiun Kerja',
+          distance: dist.toFixed(0),
+          radiusLimit: target.radius,
+          message: `Absensi ${attType} Ditolak!\nPosisi Anda saat ini berjarak ${dist.toFixed(0)} meter dari stasiun ${target.label}, melebihi batas maksimal radius (${target.radius} meter).\n\nSilakan mendekat ke lokasi stasiun kerja Anda.`
+        });
+        showToast(`⚠️ Absensi Gagal: Jarak Anda (${dist.toFixed(0)}m) di luar radius stasiun ${target.label} (Batas Radius: ${target.radius}m).`, "error");
+        return;
+      }
+    }
+
     let computedNotes = attNotes || '';
     const now = new Date();
     const officerName = currentUser.role === 'Operator' ? currentUser.name : attOfficer;
@@ -1209,6 +1237,16 @@ export default function App() {
 
     const saved = db.saveAttendance(newAttendance);
     if (saved) {
+      setAttResultModal({
+        type: 'success',
+        title: `✅ ABSENSI ${attType.toUpperCase()} SUKSES`,
+        officer: officerName,
+        station: attStation || 'Stasiun Kerja Utama',
+        shift: attShift,
+        time: now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        status: isApprovalRequired ? 'Pending SPV' : 'Disetujui',
+        message: `Absensi ${attType} atas nama ${officerName} berhasil dicatat pada jam ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}.`
+      });
       showToast(`Absensi ${attType} berhasil disimpan!`, "success");
       setAttendance(db.getAttendance());
       setAttImage(null);
@@ -2094,6 +2132,76 @@ export default function App() {
         </div>
       )}
 
+      {/* POPUP MODAL RESULT ABSENSI (Diluar Area / Sukses) */}
+      {attResultModal && (
+        <div className="modal-overlay" style={{ zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(5px)' }}>
+          <div className="glass-card modal-content" style={{ width: '100%', maxWidth: '420px', padding: '24px', textAlign: 'center', borderRadius: '20px', border: attResultModal.type === 'error' ? '2px solid rgba(239,68,68,0.5)' : '2px solid rgba(16,185,129,0.5)', background: '#1e293b', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.7)', animation: 'popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)' }}>
+            
+            <div style={{ width: '72px', height: '72px', borderRadius: '50%', background: attResultModal.type === 'error' ? 'rgba(239,68,68,0.15)' : 'rgba(16,185,129,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px auto', border: attResultModal.type === 'error' ? '2px solid rgba(239,68,68,0.3)' : '2px solid rgba(16,185,129,0.3)' }}>
+              {attResultModal.type === 'error' ? (
+                <ShieldAlert size={40} style={{ color: '#ef4444' }} />
+              ) : (
+                <CheckCircle size={40} style={{ color: '#10b981' }} />
+              )}
+            </div>
+
+            <h3 style={{ fontSize: '1.15rem', fontWeight: '800', color: attResultModal.type === 'error' ? '#ef4444' : '#10b981', marginBottom: '10px' }}>
+              {attResultModal.title}
+            </h3>
+
+            <p style={{ fontSize: '0.85rem', color: '#cbd5e1', marginBottom: '18px', whiteSpace: 'pre-line', lineHeight: '1.5' }}>
+              {attResultModal.message}
+            </p>
+
+            {attResultModal.type === 'error' && (
+              <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', padding: '14px', borderRadius: '12px', fontSize: '0.78rem', marginBottom: '20px', textAlign: 'left' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ color: '#94a3b8' }}>Stasiun Target:</span>
+                  <span style={{ fontWeight: 'bold', color: '#f8fafc' }}>{attResultModal.station}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ color: '#94a3b8' }}>Jarak Anda ke Titik:</span>
+                  <span style={{ fontWeight: 'bold', color: '#ef4444' }}>{attResultModal.distance} Meter</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#94a3b8' }}>Batas Radius Geofence:</span>
+                  <span style={{ fontWeight: 'bold', color: '#f8fafc' }}>{attResultModal.radiusLimit} Meter</span>
+                </div>
+              </div>
+            )}
+
+            {attResultModal.type === 'success' && (
+              <div style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)', padding: '14px', borderRadius: '12px', fontSize: '0.78rem', marginBottom: '20px', textAlign: 'left' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ color: '#94a3b8' }}>Nama Petugas:</span>
+                  <span style={{ fontWeight: 'bold', color: '#f8fafc' }}>{attResultModal.officer}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ color: '#94a3b8' }}>Stasiun Kerja:</span>
+                  <span style={{ fontWeight: 'bold', color: '#f8fafc' }}>{attResultModal.station}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ color: '#94a3b8' }}>Shift / Waktu:</span>
+                  <span style={{ fontWeight: 'bold', color: '#f8fafc' }}>{attResultModal.shift} ({attResultModal.time})</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#94a3b8' }}>Status Persetujuan:</span>
+                  <span style={{ fontWeight: 'bold', color: '#10b981' }}>{attResultModal.status}</span>
+                </div>
+              </div>
+            )}
+
+            <button
+              className={`btn ${attResultModal.type === 'error' ? 'btn-danger' : 'btn-primary'}`}
+              onClick={() => setAttResultModal(null)}
+              style={{ width: '100%', padding: '12px', fontSize: '0.9rem', fontWeight: 'bold', borderRadius: '12px', boxShadow: '0 4px 14px rgba(0,0,0,0.3)' }}
+            >
+              {attResultModal.type === 'error' ? 'Tutup & Cek Lokasi' : 'OK, Mengerti'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="app-header">
         <div className="logo-container">
@@ -2963,121 +3071,6 @@ export default function App() {
                   )}
                 </div>
 
-                {/* === PETA LEAFLET (OpenStreetMap) === */}
-                {settings.enableGeofence && ['Check In', 'Check Out'].includes(attType) && attGpsData && attGpsData.latitude && (() => {
-                  const target = getTargetGeofence(currentUser.jobdesk, attShift, settings, attStation, stationCoords);
-                  const dist = calculateDistance(attGpsData.latitude, attGpsData.longitude, target.lat, target.lon);
-                  const isWithin = dist !== null && dist <= target.radius;
-
-                  return (
-                    <div style={{ marginTop: '12px' }}>
-                      {/* Map Container */}
-                      <div 
-                        ref={(el) => {
-                          attMapContainerRef.current = el;
-                          // Initialize/update Leaflet map
-                          if (el && typeof window !== 'undefined' && window.L) {
-                            // Clean up existing map
-                            if (attMapRef.current) {
-                              attMapRef.current.remove();
-                              attMapRef.current = null;
-                            }
-                            
-                            const L = window.L;
-                            const map = L.map(el, { 
-                              zoomControl: true, 
-                              attributionControl: true,
-                              dragging: true,
-                              scrollWheelZoom: false
-                            });
-                            
-                            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                              attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-                              maxZoom: 19
-                            }).addTo(map);
-
-                            // Blue marker — lokasi karyawan
-                            const employeeIcon = L.divIcon({
-                              html: '<div style="width:14px;height:14px;background:#3b82f6;border-radius:50%;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3)"></div>',
-                              iconSize: [14, 14],
-                              iconAnchor: [7, 7],
-                              className: ''
-                            });
-                            L.marker([attGpsData.latitude, attGpsData.longitude], { icon: employeeIcon })
-                              .addTo(map)
-                              .bindPopup(`<b>📍 Lokasi Anda</b><br>Akurasi: ±${attGpsData.accuracy}m`);
-
-                            // Red/Green circle — geofence radius area kerja
-                            const circleColor = isWithin ? '#10b981' : '#ef4444';
-                            L.circle([target.lat, target.lon], {
-                              radius: target.radius,
-                              color: circleColor,
-                              fillColor: circleColor,
-                              fillOpacity: 0.15,
-                              weight: 2
-                            }).addTo(map);
-
-                            // Red pin — lokasi area kerja
-                            const workIcon = L.divIcon({
-                              html: '<div style="width:12px;height:12px;background:#ef4444;border-radius:50%;border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3)"></div>',
-                              iconSize: [12, 12],
-                              iconAnchor: [6, 6],
-                              className: ''
-                            });
-                            L.marker([target.lat, target.lon], { icon: workIcon })
-                              .addTo(map)
-                              .bindPopup(`<b>🏭 ${target.label}</b><br>Radius: ${target.radius}m`);
-
-                            // Fit bounds to show both markers
-                            const bounds = L.latLngBounds(
-                              [attGpsData.latitude, attGpsData.longitude],
-                              [target.lat, target.lon]
-                            ).pad(0.3);
-                            map.fitBounds(bounds, { maxZoom: 17 });
-
-                            attMapRef.current = map;
-
-                            // Fix map rendering after DOM paint
-                            setTimeout(() => map.invalidateSize(), 200);
-                          }
-                        }}
-                        style={{ 
-                          width: '100%', 
-                          height: '200px', 
-                          borderRadius: '12px', 
-                          overflow: 'hidden',
-                          border: '1px solid var(--card-border)',
-                          background: '#e5e7eb'
-                        }}
-                      />
-                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px', textAlign: 'center' }}>
-                        🔵 Lokasi Anda &nbsp; | &nbsp; 🔴 Area Kerja: {target.label} &nbsp; | &nbsp; Jarak: {dist !== null ? dist.toFixed(0) : '?'}m
-                      </div>
-
-                      {/* WARNING POPUP — Di Luar Radius */}
-                      {!isWithin && dist !== null && (
-                        <div style={{ 
-                          marginTop: '10px', 
-                          padding: '14px', 
-                          borderRadius: '12px', 
-                          background: 'rgba(239,68,68,0.08)', 
-                          border: '1px solid rgba(239,68,68,0.25)',
-                          textAlign: 'center'
-                        }}>
-                          <div style={{ fontSize: '2.5rem', marginBottom: '6px' }}>⚠️</div>
-                          <div style={{ fontSize: '0.85rem', fontWeight: 'bold', color: '#ef4444' }}>
-                            Jarak Anda dengan Lokasi Kerja Terlalu Jauh!
-                          </div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                            Anda berada <strong>{dist.toFixed(0)} meter</strong> dari area <strong>{target.label}</strong> (Batas: {target.radius}m).
-                            <br />Pastikan Anda berada di lokasi kerja yang benar sebelum melakukan absensi.
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
-
                 {/* Notes/Keterangan Field for Sakit/Izin/Cuti */}
                 {!['Check In', 'Check Out'].includes(attType) && (
                   <div className="form-group" style={{ marginTop: '12px' }}>
@@ -3144,18 +3137,18 @@ export default function App() {
                         width: '100%', 
                         marginTop: '16px', 
                         background: isGeofenceBlocked 
-                          ? 'var(--bg-tertiary)' 
+                          ? 'linear-gradient(135deg, #ef4444, #b91c1c)' 
                           : attType === 'Check In' ? 'linear-gradient(135deg, #10b981, #059669)'
                           : attType === 'Check Out' ? 'linear-gradient(135deg, #f59e0b, #d97706)'
                           : attType === 'Sakit' ? 'linear-gradient(135deg, #ef4444, #dc2626)'
                           : attType === 'Izin' ? 'linear-gradient(135deg, #3b82f6, #2563eb)'
                           : 'linear-gradient(135deg, #06b6d4, #0891b2)',
                         border: 'none',
-                        cursor: isGeofenceBlocked ? 'not-allowed' : 'pointer'
+                        cursor: 'pointer'
                       }}
-                      disabled={attGpsLoading || isGeofenceBlocked}
+                      disabled={attGpsLoading}
                     >
-                      {isGeofenceBlocked ? '⚠️ Di Luar Radius Absensi' : `Kirim Absensi ${attType}`}
+                      {isGeofenceBlocked ? `⚠️ Kirim Absensi ${attType} (Di Luar Radius)` : `Kirim Absensi ${attType}`}
                     </button>
                   );
                 })()}
