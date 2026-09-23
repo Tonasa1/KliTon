@@ -84,30 +84,30 @@ const DEFAULT_LOCATIONS = [
 // Koordinat GPS per stasiun kerja (Opsi B - geofence per lokasi)
 const DEFAULT_STATION_COORDS = {
   // === SUHU stations ===
-  'Pintu Keluar T4': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Pintu Keluar T5': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Pintu keluar masuk T45': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'pintu keluar masuk T23': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'LBS/Dome T4': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'LBS/Dome T5': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Gudang Buffer': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Dome T4': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Dome T5': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Gudang BKS': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Hopper': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Hopper BKS': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Gedung QA': { lat: -4.786429, lon: 119.614090, radius: 100 },
-  'OGS': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Pintu Keluar T4': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Pintu Keluar T5': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Pintu keluar masuk T45': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'pintu keluar masuk T23': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'LBS/Dome T4': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'LBS/Dome T5': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Gudang Buffer': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Dome T4': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Dome T5': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Gudang BKS': { lat: -4.81749419956391, lon: 119.48346663528389, radius: 100 },
+  'Hopper': { lat: -4.81749419956391, lon: 119.48346663528389, radius: 100 },
+  'Hopper BKS': { lat: -4.81749419956391, lon: 119.48346663528389, radius: 100 },
+  'Gedung QA': { lat: -4.786429, lon: 119.614090, radius: 20 },
+  'OGS': { lat: -4.786256, lon: 119.614108, radius: 25 },
   // === INSPEKSI stations ===
-  'Area Produksi': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Gudang Bahan Baku': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Ruang Kontrol': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Area Conveyor': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Area Produksi': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Gudang Bahan Baku': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Ruang Kontrol': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Area Conveyor': { lat: -4.786256, lon: 119.614108, radius: 25 },
   // === ANALIS stations ===
-  'Laboratorium Utama': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Lab Kimia': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Lab Fisika': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Area Sampling': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Laboratorium Utama': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Lab Kimia': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Lab Fisika': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Area Sampling': { lat: -4.786256, lon: 119.614108, radius: 25 },
 };
 
 const DEFAULT_SETTINGS = {
@@ -170,9 +170,14 @@ if (!localStorage.getItem(INSPEKSI_LOCATIONS_KEY)) {
 if (!localStorage.getItem(ANALIS_LOCATIONS_KEY)) {
   localStorage.setItem(ANALIS_LOCATIONS_KEY, JSON.stringify(DEFAULT_LOCATIONS));
 }
-// Merge station coords: keep existing user edits, add new defaults
+// Merge station coords: keep user custom edits, but update Biringkassi stations to physical coordinates if using old defaults
 const _existingCoords = JSON.parse(localStorage.getItem(STATION_COORDS_KEY) || '{}');
 const _mergedCoords = { ...DEFAULT_STATION_COORDS, ..._existingCoords };
+['Gudang BKS', 'Hopper', 'Hopper BKS'].forEach(st => {
+  if (!_mergedCoords[st] || Math.abs(_mergedCoords[st].lat - (-4.786256)) < 0.005) {
+    _mergedCoords[st] = DEFAULT_STATION_COORDS[st];
+  }
+});
 localStorage.setItem(STATION_COORDS_KEY, JSON.stringify(_mergedCoords));
 
 if (!localStorage.getItem(HANDOVERS_KEY)) {
