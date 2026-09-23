@@ -80,12 +80,15 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 // Get specific Geofence target based on jobdesk, shift, and selected station
 const getTargetGeofence = (jobdesk, shift, settings, stationName = '', stationCoords = {}) => {
   // Opsi B: Jika stasiun dipilih dan koordinatnya tersedia, gunakan koordinat stasiun
-  if (stationName && stationName !== 'Lainnya...' && stationCoords[stationName]) {
-    const sc = stationCoords[stationName];
+  const sc = (stationName && stationCoords && stationCoords[stationName]) 
+    ? stationCoords[stationName] 
+    : (stationName ? db.getStationCoord(stationName) : null);
+
+  if (stationName && stationName !== 'Lainnya...' && sc && sc.lat && sc.lon) {
     return {
-      lat: sc.lat,
-      lon: sc.lon,
-      radius: sc.radius || 100,
+      lat: parseFloat(sc.lat),
+      lon: parseFloat(sc.lon),
+      radius: parseInt(sc.radius || 100, 10),
       label: stationName
     };
   }
@@ -361,6 +364,13 @@ export default function App() {
     }, 30000); // setiap 30 detik
     return () => clearInterval(interval);
   }, []);
+
+  // Auto-lock GPS saat berpindah ke Tab Absensi
+  useEffect(() => {
+    if (activeTab === 'attendance') {
+      lockGeolocation();
+    }
+  }, [activeTab]);
 
   // --- HANDOVER SHIFT & PIKET CHECKER & TIMER ---
   useEffect(() => {
@@ -1120,8 +1130,21 @@ export default function App() {
       if (u && u.jobdesk) attJobdesk = u.jobdesk;
     }
 
-    // Geofence Distance Validation
-    if (settings.enableGeofence !== false && ['Check In', 'Check Out'].includes(attType)) {
+    if (['Check In', 'Check Out'].includes(attType) && !attStation) {
+      showToast("Harap pilih stasiun/lokasi kerja Anda terlebih dahulu!", "error");
+      setAttResultModal({
+        type: 'error',
+        title: '⚠️ STASIUN KERJA BELUM DIPILIH',
+        station: 'Belum Dipilih',
+        distance: '0',
+        radiusLimit: 0,
+        message: 'Gagal melakukan absensi. Harap pilih Stasiun / Lokasi Kerja Anda pada menu dropdown terlebih dahulu.'
+      });
+      return;
+    }
+
+    // Geofence Distance Validation (Wajib Selalu Aktif untuk Check In dan Check Out)
+    if (['Check In', 'Check Out'].includes(attType)) {
       if (!attGpsData || !attGpsData.latitude) {
         showToast("Harap kunci lokasi GPS terlebih dahulu!", "error");
         setAttResultModal({
@@ -3053,7 +3076,7 @@ export default function App() {
 
                           {/* Geofence Distance Indicator */}
                           {(() => {
-                            if (settings.enableGeofence && ['Check In', 'Check Out'].includes(attType)) {
+                            if (['Check In', 'Check Out'].includes(attType)) {
                               const target = getTargetGeofence(currentUser.jobdesk, attShift, settings, attStation, stationCoords);
                               const dist = calculateDistance(
                                 attGpsData.latitude,
@@ -3141,7 +3164,6 @@ export default function App() {
                 {(() => {
                   const target = getTargetGeofence(currentUser.jobdesk, attShift, settings, attStation, stationCoords);
                   const isGeofenceBlocked = 
-                    settings.enableGeofence && 
                     ['Check In', 'Check Out'].includes(attType) && 
                     attGpsData && 
                     attGpsData.latitude && 
