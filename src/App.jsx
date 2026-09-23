@@ -1110,6 +1110,8 @@ export default function App() {
       return;
     }
 
+    const isApprovalRequired = settings.requireApproval || false;
+
     let attJobdesk = currentUser.jobdesk || 'suhu';
     if (currentUser.role !== 'Operator') {
       const u = users.find(user => user.username === attOfficer);
@@ -1117,7 +1119,7 @@ export default function App() {
     }
 
     // Geofence Distance Validation
-    if (settings.enableGeofence && ['Check In', 'Check Out'].includes(attType)) {
+    if (settings.enableGeofence !== false && ['Check In', 'Check Out'].includes(attType)) {
       if (!attGpsData || !attGpsData.latitude) {
         showToast("Harap kunci lokasi GPS terlebih dahulu!", "error");
         setAttResultModal({
@@ -1252,8 +1254,6 @@ export default function App() {
       setAttImage(null);
       setAttGpsData(null);
       setAttNotes('');
-      setHistorySubTab('absensi');
-      setActiveTab('history');
       if (attType === 'Check Out' && ['Piket', 'Lembur'].includes(attShift)) {
         setShowPiketForm(true);
         setPiketPendingWarning(true);
@@ -2193,7 +2193,14 @@ export default function App() {
 
             <button
               className={`btn ${attResultModal.type === 'error' ? 'btn-danger' : 'btn-primary'}`}
-              onClick={() => setAttResultModal(null)}
+              onClick={() => {
+                const isSuccess = attResultModal.type === 'success';
+                setAttResultModal(null);
+                if (isSuccess) {
+                  setHistorySubTab('absensi');
+                  setActiveTab('history');
+                }
+              }}
               style={{ width: '100%', padding: '12px', fontSize: '0.9rem', fontWeight: 'bold', borderRadius: '12px', boxShadow: '0 4px 14px rgba(0,0,0,0.3)' }}
             >
               {attResultModal.type === 'error' ? 'Tutup & Cek Lokasi' : 'OK, Mengerti'}

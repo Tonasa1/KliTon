@@ -109,7 +109,7 @@ const DEFAULT_STATION_COORDS = {
 const DEFAULT_SETTINGS = {
   highTempAlert: 60.0,
   feverTempAlert: 80.0,
-  enableGeofence: false,
+  enableGeofence: true,
   // 1. Suhu - Day Shift & Piket
   geofenceSuhuDayLat: -4.786256,
   geofenceSuhuDayLon: 119.614108,
