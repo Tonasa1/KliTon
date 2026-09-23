@@ -1135,17 +1135,17 @@ export default function App() {
         return;
       }
 
-      // Filter: Tolak absensi jika sinyal GPS sangat tidak akurat (> 250m, sinyal seluler kasar)
-      if (parseFloat(attGpsData.accuracy) > 250) {
+      // Filter: Tolak absensi jika sinyal GPS kurang presisi (> 30m)
+      if (parseFloat(attGpsData.accuracy) > 30) {
         setAttResultModal({
           type: 'error',
           title: '⚠️ AKURASI GPS KURANG PRESISI',
           station: attStation || 'Stasiun Kerja',
           distance: '0',
-          radiusLimit: 0,
-          message: `Absensi Ditolak!\nSinyal lokasi HP Anda saat ini kurang presisi (Akurasi ±${attGpsData.accuracy}m dari pemancar seluler).\n\nSilakan pastikan GPS HP dalam mode "Presisi Tinggi", berada di area terbuka luar ruangan, lalu tekan tombol "Lock Ulang".`
+          radiusLimit: 30,
+          message: `Absensi Ditolak!\nSinyal lokasi HP Anda saat ini kurang presisi (Akurasi ±${attGpsData.accuracy}m, Syarat Maksimal ±30m).\n\nSilakan pastikan GPS HP dalam mode "Presisi Tinggi", berada di luar ruangan/area terbuka, lalu tekan tombol "Lock Ulang".`
         });
-        showToast(`⚠️ Absensi Ditolak: Sinyal GPS kurang presisi (±${attGpsData.accuracy}m). Tekan Lock Ulang.`, "error");
+        showToast(`⚠️ Absensi Ditolak: Sinyal GPS kurang presisi (±${attGpsData.accuracy}m > 30m). Tekan Lock Ulang.`, "error");
         return;
       }
       const target = getTargetGeofence(attJobdesk, attShift, settings, attStation, stationCoords);
@@ -2911,7 +2911,7 @@ export default function App() {
                 )}
 
                 {/* Station / Stasiun Kerja Selection */}
-                {attType === 'Check In' && (
+                {['Check In', 'Check Out'].includes(attType) && (
                   <div className="form-group">
                     <label>Stasiun / Lokasi Kerja Saat Ini *</label>
                     <select 
