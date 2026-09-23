@@ -568,21 +568,52 @@ export default function App() {
     }
   };
 
+  const performLogout = (msg = "Anda telah keluar dari aplikasi.") => {
+    db.logout();
+    setCurrentUser(null);
+    stopCamera();
+    stopAttCamera();
+    stopActCamera();
+    setCapturedImage(null);
+    setAttImage(null);
+    setAttGpsData(null);
+    setAttNotes('');
+    setActImage(null);
+    showToast(msg, msg.includes("⚠️") ? "error" : "success");
+  };
+
   const handleLogout = () => {
     if (window.confirm("Apakah Anda yakin ingin keluar dari akun?")) {
-      db.logout();
-      setCurrentUser(null);
-      stopCamera();
-      stopAttCamera();
-      stopActCamera();
-      setCapturedImage(null);
-      setAttImage(null);
-      setAttGpsData(null);
-      setAttNotes('');
-      setActImage(null);
-      showToast("Anda telah keluar dari aplikasi.", "success");
+      performLogout("Anda telah keluar dari aplikasi.");
     }
   };
+
+  // 10-Minute Auto-Logout Idle Timer (Tidak ada aktivitas 10 menit = Logout Otomatis)
+  useEffect(() => {
+    if (!currentUser) return;
+
+    let lastActivityTime = Date.now();
+
+    const resetIdleTimer = () => {
+      lastActivityTime = Date.now();
+    };
+
+    const activityEvents = ['mousemove', 'keydown', 'touchstart', 'scroll', 'click'];
+    activityEvents.forEach(ev => window.addEventListener(ev, resetIdleTimer, { passive: true }));
+
+    const idleInterval = setInterval(() => {
+      const now = Date.now();
+      const idleMins = (now - lastActivityTime) / 60000;
+      if (idleMins >= 10) {
+        performLogout("⚠️ Sesi Anda telah berakhir karena 10 menit tidak ada aktivitas. Silakan login kembali.");
+      }
+    }, 15000);
+
+    return () => {
+      activityEvents.forEach(ev => window.removeEventListener(ev, resetIdleTimer));
+      clearInterval(idleInterval);
+    };
+  }, [currentUser]);
 
   // --- CAMERA MANAGEMENT (Suhu) ---
   const startCamera = async () => {
