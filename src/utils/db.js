@@ -65,11 +65,15 @@ const DEFAULT_LOCATIONS = [
   'Pintu keluar masuk T45',
   'pintu keluar masuk T23',
   'LBS/Dome T4',
+  'LBS/Dome T5',
   'Gudang Buffer',
   'Dome T4',
   'Dome T5',
   'Gudang BKS',
   'Hopper',
+  'Hopper BKS',
+  'Gedung QA',
+  'OGS',
   'Area Produksi',
   'Gudang Bahan Baku',
   'Ruang Kontrol',
@@ -735,15 +739,24 @@ export const db = {
   getStationCoords() {
     try {
       const data = localStorage.getItem(STATION_COORDS_KEY);
-      return data ? JSON.parse(data) : DEFAULT_STATION_COORDS;
+      const parsed = data ? JSON.parse(data) : {};
+      const merged = { ...DEFAULT_STATION_COORDS, ...parsed };
+      // Force update Biringkassi stations to physical coordinates if using old plant fallback (~ -4.786...)
+      ['Gudang BKS', 'Hopper', 'Hopper BKS'].forEach(st => {
+        if (!merged[st] || Math.abs(parseFloat(merged[st].lat) - (-4.786256)) < 0.01) {
+          merged[st] = DEFAULT_STATION_COORDS[st];
+        }
+      });
+      return merged;
     } catch (e) {
       return DEFAULT_STATION_COORDS;
     }
   },
 
   getStationCoord(stationName) {
+    if (!stationName) return null;
     const coords = this.getStationCoords();
-    return coords[stationName] || null;
+    return coords[stationName] || DEFAULT_STATION_COORDS[stationName] || null;
   },
 
   saveStationCoord(stationName, lat, lon, radius) {
