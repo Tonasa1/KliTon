@@ -402,6 +402,7 @@ export const db = {
       const reports = this.getReports();
       const filtered = reports.filter(r => r.id !== id);
       this._safeSetItem(REPORTS_KEY, filtered);
+      this.deleteRecordFromCloud('reports', id);
       return true;
     } catch (e) {
       console.error('Failed to delete report:', e);
@@ -412,6 +413,7 @@ export const db = {
   clearAllReports() {
     try {
       localStorage.setItem(REPORTS_KEY, JSON.stringify([]));
+      this.clearTableFromCloud('reports');
       return true;
     } catch (e) {
       console.error('Failed to clear reports:', e);
@@ -455,6 +457,7 @@ export const db = {
       const list = this.getAttendance();
       const filtered = list.filter(a => a.id !== id);
       this._safeSetItem(ATTENDANCE_KEY, filtered);
+      this.deleteRecordFromCloud('attendance', id);
       return true;
     } catch (e) {
       return false;
@@ -480,6 +483,7 @@ export const db = {
   clearAllAttendance() {
     try {
       localStorage.setItem(ATTENDANCE_KEY, JSON.stringify([]));
+      this.clearTableFromCloud('attendance');
       return true;
     } catch (e) {
       return false;
@@ -517,11 +521,34 @@ export const db = {
     }
   },
 
+  async deleteRecordFromCloud(table, id) {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return;
+    try {
+      const headers = { 'apikey': key, 'Authorization': `Bearer ${key}` };
+      await fetch(`${url}/rest/v1/${table}?id=eq.${id}`, { method: 'DELETE', headers });
+    } catch (e) {
+      console.error(`Failed to delete record from cloud table ${table}:`, e);
+    }
+  },
+
+  async clearTableFromCloud(table) {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return;
+    try {
+      const headers = { 'apikey': key, 'Authorization': `Bearer ${key}` };
+      await fetch(`${url}/rest/v1/${table}?id=neq.0`, { method: 'DELETE', headers });
+    } catch (e) {
+      console.error(`Failed to clear cloud table ${table}:`, e);
+    }
+  },
+
   deleteActivity(id) {
     try {
       const list = this.getActivities();
       const filtered = list.filter(a => a.id !== id);
       this._safeSetItem(ACTIVITIES_KEY, filtered);
+      this.deleteRecordFromCloud('activities', id);
       return true;
     } catch (e) {
       return false;
@@ -531,6 +558,7 @@ export const db = {
   clearAllActivities() {
     try {
       localStorage.setItem(ACTIVITIES_KEY, JSON.stringify([]));
+      this.clearTableFromCloud('activities');
       return true;
     } catch (e) {
       return false;
