@@ -341,29 +341,8 @@ export default function App() {
     }
   }, []);
 
-  // Auto-refresh dari cloud setiap 30 detik
-  useEffect(() => {
-    const config = db.getSupabaseConfig();
-    if (!config.url || !config.key) return;
-    const interval = setInterval(async () => {
-      try {
-        const res = await db.syncWithCloud();
-        if (res) {
-          setReports(res.reports);
-          setAttendance(res.attendance);
-          if (res.activities) setActivities(res.activities);
-          if (res.handovers) setHandovers(res.handovers);
-          setUsers(db.getUsers());
-          setStationCoords(db.getStationCoords());
-          setLocations(db.getLocations());
-          setSettings(db.getSettings());
-        }
-      } catch (e) {
-        // silent fail for background sync
-      }
-    }, 30000); // setiap 30 detik
-    return () => clearInterval(interval);
-  }, []);
+  // Sinkronisasi Cloud sekarang 100% MANUAL (saat tombol 'Refresh Data' ditekan)
+  // Auto-polling 30 detik dinonaktifkan permanen untuk menghemat kuota Supabase (Egress = 0 MB)
 
   // Auto-lock GPS saat berpindah ke Tab Absensi
   useEffect(() => {
