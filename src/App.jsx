@@ -1352,10 +1352,18 @@ export default function App() {
   };
 
   const handleResetActivities = () => {
-    if (window.confirm("PERINGATAN: Semua data kegiatan akan DIHAPUS PERMANEN. Lanjutkan?")) {
+    if (window.confirm("PERINGATAN: Semua data kegiatan akan DIHAPUS PERMANEN dari Cloud dan perangkat. Lanjutkan?")) {
       db.clearAllActivities();
       setActivities([]);
       showToast("Seluruh data kegiatan telah dikosongkan.", "success");
+    }
+  };
+
+  const handleResetHandovers = () => {
+    if (window.confirm("PERINGATAN! Semua data Serah Terima Pekerjaan (Handover) akan DIHAPUS PERMANEN dari Cloud dan perangkat. Lanjutkan?")) {
+      db.clearAllHandovers();
+      setHandovers([]);
+      showToast("Seluruh data Serah Terima Pekerjaan telah dikosongkan.", "success");
     }
   };
 
@@ -4245,6 +4253,12 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
               </button>
               <button className="btn btn-secondary" onClick={handleResetAttendance} style={{ width: '100%', borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.05)' }}>
                 <Trash2 size={16} /> Hapus Semua Data Absensi
+              </button>
+              <button className="btn btn-secondary" onClick={handleResetActivities} style={{ width: '100%', borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.05)' }}>
+                <Trash2 size={16} /> Hapus Semua Data Kegiatan
+              </button>
+              <button className="btn btn-secondary" onClick={handleResetHandovers} style={{ width: '100%', borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.05)' }}>
+                <Trash2 size={16} /> Hapus Semua Data Handover (Serah Terima)
               </button>
               <button className="btn btn-secondary" onClick={async () => {
                 if (window.confirm("PERINGATAN! Semua gambar/foto yang tersimpan di Cloud dan perangkat akan DIHAPUS PERMANEN untuk menghemat ruang penyimpanan. Data teks (nama, waktu, lokasi) tetap aman. Lanjutkan?")) {
