@@ -89,7 +89,7 @@ const getTargetGeofence = (jobdesk, shift, settings, stationName = '', stationCo
     return {
       lat: parseFloat(sc.lat),
       lon: parseFloat(sc.lon),
-      radius: parseInt(sc.radius || 100, 10),
+      radius: Math.max(100, parseInt(sc.radius || 100, 10)),
       label: stationName
     };
   }
@@ -1237,22 +1237,25 @@ export default function App() {
         return;
       }
 
-      // Filter: Tolak absensi jika sinyal GPS kurang presisi (> 30m)
-      if (parseFloat(attGpsData.accuracy) > 30) {
+      // Filter: Tolak absensi jika sinyal GPS kurang presisi (> 100m)
+      if (parseFloat(attGpsData.accuracy) > 100) {
         setAttResultModal({
           type: 'error',
           title: '⚠️ AKURASI GPS KURANG PRESISI',
           station: attStation || 'Stasiun Kerja',
           distance: '0',
-          radiusLimit: 30,
-          message: `Absensi Ditolak!\nSinyal lokasi HP Anda saat ini kurang presisi (Akurasi ±${attGpsData.accuracy}m, Syarat Maksimal ±30m).\n\nSilakan pastikan GPS HP dalam mode "Presisi Tinggi", berada di luar ruangan/area terbuka, lalu tekan tombol "Lock Ulang".`
+          radiusLimit: 100,
+          message: `Absensi Ditolak!\nSinyal lokasi HP Anda saat ini kurang presisi (Akurasi ±${attGpsData.accuracy}m, Syarat Maksimal ±100m).\n\nSilakan pastikan GPS HP dalam mode "Presisi Tinggi", berada di luar ruangan/area terbuka, lalu tekan tombol "Lock Ulang".`
         });
-        showToast(`⚠️ Absensi Ditolak: Sinyal GPS kurang presisi (±${attGpsData.accuracy}m > 30m). Tekan Lock Ulang.`, "error");
+        showToast(`⚠️ Absensi Ditolak: Sinyal GPS kurang presisi (±${attGpsData.accuracy}m > 100m). Tekan Lock Ulang.`, "error");
         return;
       }
       const target = getTargetGeofence(attJobdesk, attShift, settings, attStation, stationCoords);
       const dist = calculateDistance(attGpsData.latitude, attGpsData.longitude, target.lat, target.lon);
-      if (dist !== null && dist > target.radius) {
+      const accVal = parseFloat(attGpsData.accuracy) || 0;
+      const gpsTolerance = accVal > 0 && accVal <= 100 ? accVal * 0.5 : 0;
+      const effectiveRadius = Math.max(100, target.radius) + gpsTolerance;
+      if (dist !== null && dist > effectiveRadius) {
         setAttResultModal({
           type: 'error',
           title: '⚠️ ABSENSI DITOLAK (DILUAR AREA)',
@@ -1668,93 +1671,98 @@ export default function App() {
   };
 
   const handleDownloadDataset = (type, startDate, endDate, format = 'excel') => {
-    if (type === 'audit') {
-      const auditList = db.getMultiAccountAudit();
-      const filteredAudit = auditList.filter(dev => {
-        if (!dev.lastActive) return true;
-        const itemDate = new Date(dev.lastActive);
+    try {
+      if (type === 'audit') {
+        const auditList = typeof db.getMultiAccountAudit === 'function' ? db.getMultiAccountAudit() : [];
+        const filteredAudit = auditList.filter(dev => {
+          if (!dev.lastActive) return true;
+          const itemDate = new Date(dev.lastActive);
+          const afterStart = startDate ? itemDate >= new Date(startDate) : true;
+          const beforeEnd = endDate ? itemDate <= new Date(endDate + 'T23:59:59') : true;
+          return afterStart && beforeEnd;
+        });
+
+        if (filteredAudit.length === 0) {
+          showToast("Tidak ada data audit pada periode waktu yang dipilih.", "error");
+          return;
+        }
+
+        let success = false;
+        if (format === 'excel' || format === 'xlsx') {
+          success = db.exportAuditToExcel(filteredAudit);
+        } else if (format === 'csv') {
+          success = db.exportAuditToCSV(filteredAudit);
+        } else {
+          success = db.exportAuditToPDF(filteredAudit);
+        }
+
+        if (success) {
+          const label = startDate && endDate ? `${startDate} s/d ${endDate}` : (startDate ? `sejak ${startDate}` : 'semua waktu');
+          showToast(`Laporan Audit Perangkat periode ${label} berhasil diunduh (${filteredAudit.length} perangkat)!`, "success");
+        } else {
+          showToast("Gagal mengunduh laporan audit.", "error");
+        }
+        return;
+      }
+
+      let rawList = [];
+      if (type === 'suhu') rawList = reports;
+      else if (type === 'absensi') rawList = attendance;
+      else if (type === 'kegiatan') rawList = activities;
+      else if (type === 'handover') rawList = handovers;
+      else if (type === 'audit') rawList = typeof db.getMultiAccountAudit === 'function' ? db.getMultiAccountAudit() : [];
+
+      if (currentUser && currentUser.role === 'Operator') {
+        if (type === 'suhu') rawList = rawList.filter(r => r.officer === currentUser.name);
+        else if (type === 'absensi') rawList = rawList.filter(a => a.officer === currentUser.name);
+        else if (type === 'kegiatan') rawList = rawList.filter(a => a.officer === currentUser.name);
+        else if (type === 'handover') rawList = rawList.filter(h => h.senderName === currentUser.name || h.receiverName === currentUser.name);
+      }
+
+      const filtered = rawList.filter(item => {
+        const ts = item.timestamp || item.sentAt || item.lastActive || item.created_at;
+        if (!ts) return true;
+        const itemDate = new Date(ts);
         const afterStart = startDate ? itemDate >= new Date(startDate) : true;
         const beforeEnd = endDate ? itemDate <= new Date(endDate + 'T23:59:59') : true;
         return afterStart && beforeEnd;
       });
 
-      if (filteredAudit.length === 0) {
-        showToast("Tidak ada data audit pada periode waktu yang dipilih.", "error");
+      if (filtered.length === 0) {
+        showToast("Tidak ada data pada periode waktu yang dipilih.", "error");
         return;
       }
 
       let success = false;
       if (format === 'excel' || format === 'xlsx') {
-        success = db.exportAuditToExcel(filteredAudit);
+        if (type === 'suhu') success = db.exportToExcel(filtered);
+        else if (type === 'absensi') success = db.exportAttendanceToExcel(filtered);
+        else if (type === 'kegiatan') success = db.exportActivitiesToExcel(filtered);
+        else if (type === 'handover') success = db.exportHandoversToExcel(filtered);
+        else if (type === 'audit') success = db.exportAuditToExcel(filtered);
       } else if (format === 'csv') {
-        success = db.exportAuditToCSV(filteredAudit);
+        if (type === 'suhu') success = db.exportToCSV(filtered);
+        else if (type === 'absensi') success = db.exportAttendanceToCSV(filtered);
+        else if (type === 'kegiatan') success = db.exportActivitiesToCSV(filtered);
+        else if (type === 'handover') success = db.exportHandoversToCSV(filtered);
+        else if (type === 'audit') success = db.exportAuditToCSV(filtered);
       } else {
-        success = db.exportAuditToPDF(filteredAudit);
+        if (type === 'suhu') success = db.exportToPDF(filtered);
+        else if (type === 'absensi') success = db.exportAttendanceToPDF(filtered);
+        else if (type === 'kegiatan') success = db.exportActivitiesToPDF(filtered);
+        else if (type === 'handover') success = db.exportHandoversToPDF(filtered);
+        else if (type === 'audit') success = db.exportAuditToPDF(filtered);
       }
 
       if (success) {
         const label = startDate && endDate ? `${startDate} s/d ${endDate}` : (startDate ? `sejak ${startDate}` : 'semua waktu');
-        showToast(`Laporan Audit Perangkat periode ${label} berhasil diunduh (${filteredAudit.length} perangkat)!`, "success");
+        showToast(`Laporan ${type} periode ${label} berhasil diunduh (${filtered.length} data)!`, "success");
       } else {
-        showToast("Gagal mengunduh laporan audit.", "error");
+        showToast("Gagal mengunduh laporan.", "error");
       }
-      return;
-    }
-
-    let rawList = [];
-    if (type === 'suhu') rawList = reports;
-    else if (type === 'absensi') rawList = attendance;
-    else if (type === 'kegiatan') rawList = activities;
-    else if (type === 'handover') rawList = handovers;
-    else if (type === 'audit') rawList = db.getMultiAccountAudit();
-
-    if (currentUser && currentUser.role === 'Operator') {
-      if (type === 'suhu') rawList = rawList.filter(r => r.officer === currentUser.name);
-      else if (type === 'absensi') rawList = rawList.filter(a => a.officer === currentUser.name);
-      else if (type === 'kegiatan') rawList = rawList.filter(a => a.officer === currentUser.name);
-      else if (type === 'handover') rawList = rawList.filter(h => h.senderName === currentUser.name || h.receiverName === currentUser.name);
-    }
-
-    const filtered = rawList.filter(item => {
-      const ts = item.timestamp || item.sentAt || item.lastActive || item.created_at;
-      if (!ts) return true;
-      const itemDate = new Date(ts);
-      const afterStart = startDate ? itemDate >= new Date(startDate) : true;
-      const beforeEnd = endDate ? itemDate <= new Date(endDate + 'T23:59:59') : true;
-      return afterStart && beforeEnd;
-    });
-
-    if (filtered.length === 0) {
-      showToast("Tidak ada data pada periode waktu yang dipilih.", "error");
-      return;
-    }
-
-    let success = false;
-    if (format === 'excel' || format === 'xlsx') {
-      if (type === 'suhu') success = db.exportToExcel(filtered);
-      else if (type === 'absensi') success = db.exportAttendanceToExcel(filtered);
-      else if (type === 'kegiatan') success = db.exportActivitiesToExcel(filtered);
-      else if (type === 'handover') success = db.exportHandoversToExcel(filtered);
-      else if (type === 'audit') success = db.exportAuditToExcel(filtered);
-    } else if (format === 'csv') {
-      if (type === 'suhu') success = db.exportToCSV(filtered);
-      else if (type === 'absensi') success = db.exportAttendanceToCSV(filtered);
-      else if (type === 'kegiatan') success = db.exportActivitiesToCSV(filtered);
-      else if (type === 'handover') success = db.exportHandoversToCSV(filtered);
-      else if (type === 'audit') success = db.exportAuditToCSV(filtered);
-    } else {
-      if (type === 'suhu') success = db.exportToPDF(filtered);
-      else if (type === 'absensi') success = db.exportAttendanceToPDF(filtered);
-      else if (type === 'kegiatan') success = db.exportActivitiesToPDF(filtered);
-      else if (type === 'handover') success = db.exportHandoversToPDF(filtered);
-      else if (type === 'audit') success = db.exportAuditToPDF(filtered);
-    }
-
-    if (success) {
-      const label = startDate && endDate ? `${startDate} s/d ${endDate}` : (startDate ? `sejak ${startDate}` : 'semua waktu');
-      showToast(`Laporan ${type} periode ${label} berhasil diunduh (${filtered.length} data)!`, "success");
-    } else {
-      showToast("Gagal mengunduh laporan.", "error");
+    } catch (err) {
+      console.error("handleDownloadDataset error:", err);
+      showToast("Terjadi kendala saat mengunduh: " + (err.message || "Gagal"), "error");
     }
   };
 
@@ -1787,7 +1795,8 @@ export default function App() {
       if (success) showToast("Laporan kegiatan diekspor ke file CSV!", "success");
       else showToast("Tidak ada data kegiatan untuk diekspor.", "error");
     } else if (historySubTab === 'audit') {
-      const success = db.exportAuditToCSV(db.getMultiAccountAudit());
+      const auditData = typeof db.getMultiAccountAudit === 'function' ? db.getMultiAccountAudit() : [];
+      const success = db.exportAuditToCSV(auditData);
       if (success) showToast("Laporan audit diekspor ke file CSV!", "success");
       else showToast("Tidak ada data audit untuk diekspor.", "error");
     } else {
@@ -1807,7 +1816,8 @@ export default function App() {
       if (success) showToast("Laporan kegiatan diekspor ke file Excel (.xlsx) rapi!", "success");
       else showToast("Tidak ada data kegiatan untuk diekspor.", "error");
     } else if (historySubTab === 'audit') {
-      const success = db.exportAuditToExcel(db.getMultiAccountAudit());
+      const auditData = typeof db.getMultiAccountAudit === 'function' ? db.getMultiAccountAudit() : [];
+      const success = db.exportAuditToExcel(auditData);
       if (success) showToast("Laporan audit diekspor ke file Excel (.xlsx) rapi!", "success");
       else showToast("Tidak ada data audit untuk diekspor.", "error");
     } else {
@@ -2628,9 +2638,8 @@ export default function App() {
                   todayAtt.sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp)).forEach(a => {
                     latestEvents[a.officer] = a;
                   });
-                  const onDutyList = Object.values(latestEvents).filter(e => e.type === 'Check In');
-                  const checkedOutList = Object.values(latestEvents).filter(e => e.type === 'Check Out');
-                  const multiDevs = db.getMultiAccountAudit().filter(d => d.isMultiAccount);
+                  const auditList = typeof db.getMultiAccountAudit === 'function' ? db.getMultiAccountAudit() : [];
+                  const multiDevs = auditList.filter(d => d.isMultiAccount);
 
                   return (
                     <>
@@ -3158,7 +3167,7 @@ export default function App() {
             <div>
               {/* --- AUDIT DETEKSI MULTI-AKUN PERANGKAT (Titip Absen & Pekerjaan) --- */}
               {(() => {
-                const auditList = db.getMultiAccountAudit();
+                const auditList = typeof db.getMultiAccountAudit === 'function' ? db.getMultiAccountAudit() : [];
                 const multiDevs = auditList.filter(d => d.isMultiAccount);
 
                 return (
@@ -3568,7 +3577,10 @@ export default function App() {
                                 target.lon
                               );
                               if (dist !== null) {
-                                const isWithin = dist <= target.radius;
+                                const accNum = parseFloat(attGpsData.accuracy || 0);
+                                const gpsTol = accNum > 0 && accNum <= 100 ? accNum * 0.5 : 0;
+                                const effectiveRadius = Math.max(100, target.radius) + gpsTol;
+                                const isWithin = dist <= effectiveRadius;
                                 return (
                                   <div style={{ 
                                     marginTop: '8px', 
@@ -3584,6 +3596,11 @@ export default function App() {
                                     <div style={{ color: 'var(--text-secondary)', marginTop: '2px' }}>
                                       Jarak ke posisi: <strong>{dist.toFixed(1)} meter</strong> (Batas Maksimal: {target.radius} meter)
                                     </div>
+                                    {accNum > 100 && (
+                                      <div style={{ color: '#f59e0b', fontSize: '0.7rem', marginTop: '4px' }}>
+                                        ⚠️ Akurasi GPS ±{accNum.toFixed(0)}m (sinyal seluler/PC/VPN). Buka di smartphone dengan GPS aktif & matikan VPN agar posisi presisi.
+                                      </div>
+                                    )}
                                   </div>
                                 );
                               }
@@ -3646,6 +3663,9 @@ export default function App() {
 
                 {(() => {
                   const target = getTargetGeofence(currentUser.jobdesk, attShift, settings, attStation, stationCoords);
+                  const accNum = parseFloat(attGpsData?.accuracy || 0);
+                  const gpsTol = accNum > 0 && accNum <= 100 ? accNum * 0.5 : 0;
+                  const effectiveRadius = Math.max(100, target.radius) + gpsTol;
                   const isGeofenceBlocked = 
                     ['Check In', 'Check Out'].includes(attType) && 
                     attGpsData && 
@@ -3655,7 +3675,7 @@ export default function App() {
                       attGpsData.longitude,
                       target.lat,
                       target.lon
-                    ) > target.radius;
+                    ) > effectiveRadius;
 
                   return (
                     <button 
@@ -3706,7 +3726,10 @@ export default function App() {
                     onClick={() => setHistorySubTab('audit')}
                   >
                     <Smartphone size={14} style={{ marginRight: '6px', display: 'inline' }} />
-                    Audit & Titip Absen ({db.getMultiAccountAudit().filter(d => d.isMultiAccount).length > 0 ? `${db.getMultiAccountAudit().filter(d => d.isMultiAccount).length} Indikasi` : 'Aman'})
+                    Audit & Titip Absen ({(() => {
+                      const count = typeof db.getMultiAccountAudit === 'function' ? db.getMultiAccountAudit().filter(d => d.isMultiAccount).length : 0;
+                      return count > 0 ? `${count} Indikasi` : 'Aman';
+                    })()})
                   </button>
                 </>
               ) : (currentUser.jobdesk || 'suhu') === 'suhu' ? (
@@ -4158,7 +4181,7 @@ export default function App() {
             {historySubTab === 'audit' && (
               <div>
                 {(() => {
-                  const auditList = db.getMultiAccountAudit();
+                  const auditList = typeof db.getMultiAccountAudit === 'function' ? db.getMultiAccountAudit() : [];
                   const multiDevs = auditList.filter(d => d.isMultiAccount);
                   return (
                     <div>
@@ -5022,7 +5045,7 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
                 else if (downloadModalType === 'absensi') targetList = attendance;
                 else if (downloadModalType === 'kegiatan') targetList = activities;
                 else if (downloadModalType === 'handover') targetList = handovers;
-                else if (downloadModalType === 'audit') targetList = db.getMultiAccountAudit();
+                else if (downloadModalType === 'audit') targetList = typeof db.getMultiAccountAudit === 'function' ? db.getMultiAccountAudit() : [];
 
                 const count = targetList.filter(item => {
                   const ts = item.timestamp || item.sentAt || item.lastActive || item.created_at;
@@ -5046,24 +5069,36 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
               {/* Action Buttons */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <button 
+                  type="button"
                   className="btn btn-primary" 
-                  onClick={() => handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'excel')}
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontSize: '0.85rem', padding: '11px', background: '#16a34a', borderColor: '#16a34a', fontWeight: 'bold' }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'excel');
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontSize: '0.85rem', padding: '11px', background: '#16a34a', borderColor: '#16a34a', fontWeight: 'bold', cursor: 'pointer' }}
                 >
                   <Download size={16} /> 📊 Unduh Excel (.xlsx) - Tabel Rapi
                 </button>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                   <button 
+                    type="button"
                     className="btn btn-secondary" 
-                    onClick={() => handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'pdf')}
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.8rem', padding: '10px' }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'pdf');
+                    }}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.8rem', padding: '10px', cursor: 'pointer' }}
                   >
                     <Download size={15} /> Unduh PDF
                   </button>
                   <button 
+                    type="button"
                     className="btn btn-secondary" 
-                    onClick={() => handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'csv')}
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.8rem', padding: '10px' }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'csv');
+                    }}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.8rem', padding: '10px', cursor: 'pointer' }}
                   >
                     <Download size={15} /> Unduh CSV
                   </button>
@@ -5237,7 +5272,7 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
                 else if (downloadModalType === 'absensi') targetList = attendance;
                 else if (downloadModalType === 'kegiatan') targetList = activities;
                 else if (downloadModalType === 'handover') targetList = handovers;
-                else if (downloadModalType === 'audit') targetList = db.getMultiAccountAudit();
+                else if (downloadModalType === 'audit') targetList = typeof db.getMultiAccountAudit === 'function' ? db.getMultiAccountAudit() : [];
 
                 const count = targetList.filter(item => {
                   const ts = item.timestamp || item.sentAt || item.lastActive || item.created_at;
@@ -5261,33 +5296,39 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
               {/* Tombol Unduh */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
                 <button 
+                  type="button"
                   className="btn btn-primary" 
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.preventDefault();
                     handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'excel');
                     setShowPeriodDownloadModal(false);
                   }}
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontSize: '0.85rem', padding: '11px', background: '#16a34a', borderColor: '#16a34a', fontWeight: 'bold' }}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontSize: '0.85rem', padding: '11px', background: '#16a34a', borderColor: '#16a34a', fontWeight: 'bold', cursor: 'pointer' }}
                 >
                   <Download size={16} /> 📊 Unduh Excel (.xlsx) - Tabel Rapi
                 </button>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                   <button 
+                    type="button"
                     className="btn btn-secondary" 
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.preventDefault();
                       handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'pdf');
                       setShowPeriodDownloadModal(false);
                     }}
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.8rem', padding: '10px' }}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.8rem', padding: '10px', cursor: 'pointer' }}
                   >
                     <Download size={15} /> Unduh PDF
                   </button>
                   <button 
+                    type="button"
                     className="btn btn-secondary" 
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.preventDefault();
                       handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'csv');
                       setShowPeriodDownloadModal(false);
                     }}
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.8rem', padding: '10px' }}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.8rem', padding: '10px', cursor: 'pointer' }}
                   >
                     <Download size={15} /> Unduh CSV
                   </button>
