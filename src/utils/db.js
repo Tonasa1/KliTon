@@ -13,6 +13,7 @@ const ANALIS_LOCATIONS_KEY = 'thermascan_analis_locations';
 const STATION_COORDS_KEY = 'thermascan_station_coords';
 const HANDOVERS_KEY = 'thermascan_handovers';
 const DEVICE_LOGS_KEY = 'thermascan_device_logs';
+const AUDIT_RESET_KEY = 'thermascan_audit_reset_at';
 
 const DEFAULT_OFFICERS = [
   'FAHRIL',
@@ -258,6 +259,54 @@ export const db = {
     }
   },
 
+  getAuditResetAt() {
+    return localStorage.getItem(AUDIT_RESET_KEY) || null;
+  },
+
+  clearDeviceAuditHistory() {
+    try {
+      const now = new Date().toISOString();
+      localStorage.setItem(DEVICE_LOGS_KEY, JSON.stringify([]));
+      localStorage.setItem(AUDIT_RESET_KEY, now);
+
+      // Clean deviceId from local records so old local records don't re-trigger
+      const cleanDevIds = (key) => {
+        try {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const arr = JSON.parse(raw);
+            let changed = false;
+            arr.forEach(item => {
+              if (item.deviceId) {
+                delete item.deviceId;
+                changed = true;
+              }
+              if (item.senderDeviceId) {
+                delete item.senderDeviceId;
+                changed = true;
+              }
+              if (item.receiverDeviceId) {
+                delete item.receiverDeviceId;
+                changed = true;
+              }
+            });
+            if (changed) localStorage.setItem(key, JSON.stringify(arr));
+          }
+        } catch (e) {}
+      };
+      cleanDevIds(ATTENDANCE_KEY);
+      cleanDevIds(REPORTS_KEY);
+      cleanDevIds(ACTIVITIES_KEY);
+      cleanDevIds(HANDOVERS_KEY);
+
+      this.uploadSettingsToCloud();
+      return true;
+    } catch (e) {
+      console.error('Failed to clear device audit history:', e);
+      return false;
+    }
+  },
+
   getMultiAccountAudit() {
     const logs = this.getDeviceLogs();
     const attendance = this.getAttendance();
@@ -265,10 +314,14 @@ export const db = {
     const activities = this.getActivities();
     const handovers = this.getHandovers();
 
+    const resetAtStr = this.getAuditResetAt();
+    const resetTime = resetAtStr ? new Date(resetAtStr).getTime() : 0;
+
     const deviceMap = new Map();
 
     const processEntry = (deviceId, username, role, action, timestamp) => {
       if (!deviceId || !username) return;
+      if (resetTime && timestamp && new Date(timestamp).getTime() <= resetTime) return; // Skip records prior to reset
       if (role && role !== 'Operator') return; // Focus audit on Operator accounts
 
       if (!deviceMap.has(deviceId)) {
@@ -955,6 +1008,41 @@ export const db = {
     return true;
   },
 
+  exportHandoversToCSV(handovers) {
+    if (!handovers || handovers.length === 0) return false;
+
+    const headers = ['ID Handover', 'Waktu Kirim', 'Jobdesk', 'Shift Asal', 'Shift Tujuan', 'Nama Pengirim', 'Stasiun Pengirim', 'Nama Penerima', 'Stasiun Penerima', 'Waktu Diterima', 'Ringkasan', 'Masalah/Kendala', 'Catatan', 'Status'];
+
+    const rows = handovers.map(h => {
+      const formattedSentAt = h.sentAt ? new Date(h.sentAt).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'medium' }) : '-';
+      const formattedReceivedAt = h.receivedAt ? new Date(h.receivedAt).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'medium' }) : '-';
+      return [
+        h.id,
+        formattedSentAt,
+        h.jobdesk || '-',
+        h.shiftFrom || '-',
+        h.shiftTo || '-',
+        h.senderName || '-',
+        h.senderStation || '-',
+        h.receiverName || '-',
+        h.receiverStation || '-',
+        formattedReceivedAt,
+        h.summary ? h.summary.replace(/\n/g, ' ') : '-',
+        h.issues ? h.issues.replace(/\n/g, ' ') : '-',
+        h.notes ? h.notes.replace(/\n/g, ' ') : '-',
+        h.status || '-'
+      ];
+    });
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))
+    ].join('\r\n');
+
+    this.downloadFile(csvContent, 'Laporan_Handover_ThermaScan');
+    return true;
+  },
+
   exportToPDF(reports) {
     if (!reports || reports.length === 0) return false;
     const doc = new jsPDF('landscape');
@@ -1064,6 +1152,114 @@ export const db = {
     });
 
     doc.save('Laporan_Absensi_ThermaScan.pdf');
+    return true;
+  },
+
+  exportHandoversToPDF(handovers) {
+    if (!handovers || handovers.length === 0) return false;
+    const doc = new jsPDF('landscape');
+    
+    doc.setFontSize(16);
+    doc.text('Laporan Serah Terima Pekerjaan (Handover) ThermaScan', 14, 15);
+    doc.setFontSize(10);
+    doc.text(`Waktu Cetak: ${new Date().toLocaleString('id-ID')}`, 14, 22);
+
+    const tableData = handovers.map(h => [
+      h.sentAt ? new Date(h.sentAt).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '-',
+      h.jobdesk || '-',
+      `${h.shiftFrom || '-'} -> ${h.shiftTo || '-'}`,
+      h.senderName || '-',
+      h.receiverName || 'Menunggu',
+      h.summary || '-',
+      h.status || 'pending'
+    ]);
+
+    doc.autoTable({
+      startY: 28,
+      head: [['Waktu Kirim', 'Jobdesk', 'Shift', 'Pengirim', 'Penerima', 'Ringkasan', 'Status']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [59, 130, 246] }
+    });
+
+    doc.save('Laporan_Handover_ThermaScan.pdf');
+    return true;
+  },
+
+  exportAuditToCSV(auditList) {
+    if (!auditList || auditList.length === 0) return false;
+
+    const headers = [
+      'ID Perangkat',
+      'Status Audit',
+      'Jumlah Operator Terdeteksi',
+      'Daftar Operator (Aktivitas Terakhir)',
+      'Pertama Terlihat',
+      'Aktivitas Terakhir',
+      'Catatan Kesimpulan'
+    ];
+
+    const rows = auditList.map(dev => {
+      const userDetail = dev.users.map(u => `${u.name} (${u.count}x ${u.lastAction || 'Aktivitas'})`).join('; ');
+      const formattedFirst = dev.firstSeen ? new Date(dev.firstSeen).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '-';
+      const formattedLast = dev.lastActive ? new Date(dev.lastActive).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '-';
+      const statusLabel = dev.isMultiAccount ? 'TERINDIKASI TITIP ABSEN (MULTI-AKUN)' : 'STERIL (1 AKUN)';
+      const notes = dev.isMultiAccount 
+        ? `PERINGATAN: Perangkat digunakan oleh ${dev.userCount} akun operator berbeda. Perlu konfirmasi fisik.`
+        : 'Perangkat normal, hanya digunakan oleh 1 operator.';
+
+      return [
+        dev.deviceId,
+        statusLabel,
+        dev.userCount,
+        userDetail,
+        formattedFirst,
+        formattedLast,
+        notes
+      ];
+    });
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))
+    ].join('\r\n');
+
+    this.downloadFile(csvContent, 'Laporan_Audit_Perangkat_Titip_Absen');
+    return true;
+  },
+
+  exportAuditToPDF(auditList) {
+    if (!auditList || auditList.length === 0) return false;
+    const doc = new jsPDF('landscape');
+    
+    doc.setFontSize(16);
+    doc.text('Laporan Audit Perangkat & Deteksi Titip Absen ThermaScan', 14, 15);
+    doc.setFontSize(10);
+    doc.text(`Waktu Cetak: ${new Date().toLocaleString('id-ID')}`, 14, 22);
+
+    const multiCount = auditList.filter(d => d.isMultiAccount).length;
+    doc.setFontSize(10);
+    doc.setTextColor(multiCount > 0 ? 239 : 16, multiCount > 0 ? 68 : 185, multiCount > 0 ? 68 : 129);
+    doc.text(`Ringkasan: ${auditList.length} Perangkat diaudit | ${multiCount} Terindikasi Multi-Akun (Titip Absen)`, 14, 28);
+    doc.setTextColor(0, 0, 0);
+
+    const tableData = auditList.map(dev => [
+      dev.deviceId,
+      dev.isMultiAccount ? 'TERINDIKASI' : 'STERIL',
+      `${dev.userCount} Operator`,
+      dev.users.map(u => `${u.name} (${u.count}x)`).join(', '),
+      dev.lastActive ? new Date(dev.lastActive).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' }) : '-'
+    ]);
+
+    doc.autoTable({
+      startY: 34,
+      head: [['ID Perangkat', 'Status', 'Jumlah Akun', 'Daftar Operator Terdeteksi', 'Aktivitas Terakhir']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [220, 38, 38] }
+    });
+
+    doc.save('Laporan_Audit_Perangkat_Titip_Absen.pdf');
     return true;
   },
 
@@ -1757,7 +1953,8 @@ export const db = {
           locations: this.getLocations(),
           stationCoords: this.getStationCoords(),
           settings: this.getSettings(),
-          deviceLogs: this.getDeviceLogs()
+          deviceLogs: this.getDeviceLogs(),
+          auditResetAt: this.getAuditResetAt()
         },
         updated_at: new Date().toISOString()
       };
@@ -1795,11 +1992,24 @@ export const db = {
           const _mergedSettings = { ...DEFAULT_SETTINGS, ...cloudData.settings };
           localStorage.setItem(SETTINGS_KEY, JSON.stringify(_mergedSettings));
         }
+        if (cloudData.auditResetAt) {
+          const localReset = localStorage.getItem(AUDIT_RESET_KEY);
+          if (!localReset || new Date(cloudData.auditResetAt) > new Date(localReset)) {
+            localStorage.setItem(AUDIT_RESET_KEY, cloudData.auditResetAt);
+          }
+        }
+        const effectiveReset = localStorage.getItem(AUDIT_RESET_KEY);
+        const resetTime = effectiveReset ? new Date(effectiveReset).getTime() : 0;
+
         if (cloudData.deviceLogs && Array.isArray(cloudData.deviceLogs)) {
           const localLogs = JSON.parse(localStorage.getItem(DEVICE_LOGS_KEY) || '[]');
           const mergedLogsMap = new Map();
-          cloudData.deviceLogs.forEach(l => mergedLogsMap.set(l.id, l));
-          localLogs.forEach(l => mergedLogsMap.set(l.id, l));
+          cloudData.deviceLogs
+            .filter(l => !resetTime || new Date(l.timestamp).getTime() > resetTime)
+            .forEach(l => mergedLogsMap.set(l.id, l));
+          localLogs
+            .filter(l => !resetTime || new Date(l.timestamp).getTime() > resetTime)
+            .forEach(l => mergedLogsMap.set(l.id, l));
           const mergedLogs = Array.from(mergedLogsMap.values())
             .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
             .slice(0, 200);
