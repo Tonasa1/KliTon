@@ -15,6 +15,11 @@ const STATION_COORDS_KEY = 'thermascan_station_coords';
 const HANDOVERS_KEY = 'thermascan_handovers';
 const DEVICE_LOGS_KEY = 'thermascan_device_logs';
 const AUDIT_RESET_KEY = 'thermascan_audit_reset_at';
+const ATTENDANCE_RESET_KEY = 'thermascan_attendance_reset_at';
+const REPORTS_RESET_KEY = 'thermascan_reports_reset_at';
+const ACTIVITIES_RESET_KEY = 'thermascan_activities_reset_at';
+const HANDOVERS_RESET_KEY = 'thermascan_handovers_reset_at';
+const DELETED_IDS_KEY = 'thermascan_deleted_ids';
 
 const DEFAULT_OFFICERS = [
   'FAHRIL',
@@ -30,7 +35,7 @@ const DEFAULT_USERS = [
   { username: 'supervisor', role: 'Supervisor', password: 'spv123', jobdesk: 'suhu' },
   { username: 'supervisor1', role: 'Supervisor', password: 'spv123', jobdesk: 'analis' },
   { username: 'manager1', role: 'Manager', password: 'manager123', jobdesk: 'suhu' },
-  { username: 'KOPKAR', role: 'KOPKAR', password: 'kopkar123', jobdesk: 'all' },
+  { username: 'KOPKAR', role: 'KOPKAR', password: 'kopkar 123', jobdesk: 'all' },
   // === SUHU ===
   { username: 'FAHRIL', role: 'Operator', password: 'operator123', jobdesk: 'suhu' },
   { username: 'JUMAHIR', role: 'Operator', password: 'operator123', jobdesk: 'suhu' },
@@ -91,30 +96,30 @@ const DEFAULT_LOCATIONS = [
 // Koordinat GPS per stasiun kerja (Opsi B - geofence per lokasi)
 const DEFAULT_STATION_COORDS = {
   // === SUHU stations ===
-  'Pintu Keluar T4': { lat: -4.786256, lon: 119.614108, radius: 25 },
-  'Pintu Keluar T5': { lat: -4.786256, lon: 119.614108, radius: 25 },
-  'Pintu keluar masuk T45': { lat: -4.786256, lon: 119.614108, radius: 25 },
-  'pintu keluar masuk T23': { lat: -4.786256, lon: 119.614108, radius: 25 },
-  'LBS/Dome T4': { lat: -4.786256, lon: 119.614108, radius: 25 },
-  'LBS/Dome T5': { lat: -4.786256, lon: 119.614108, radius: 25 },
-  'Gudang Buffer': { lat: -4.786256, lon: 119.614108, radius: 25 },
-  'Dome T4': { lat: -4.786256, lon: 119.614108, radius: 25 },
-  'Dome T5': { lat: -4.786256, lon: 119.614108, radius: 25 },
-  'Gudang BKS': { lat: -4.81749419956391, lon: 119.48346663528389, radius: 100 },
-  'Hopper': { lat: -4.81749419956391, lon: 119.48346663528389, radius: 100 },
-  'Hopper BKS': { lat: -4.81749419956391, lon: 119.48346663528389, radius: 100 },
-  'Gedung QA': { lat: -4.786429, lon: 119.614090, radius: 20 },
-  'OGS': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Pintu keluar masuk T45': { lat: -4.7895993, lon: 119.6123325, radius: 100 },
+  'pintu keluar masuk T23': { lat: -4.783923, lon: 119.614793, radius: 100 },
+  'LBS/Dome T4': { lat: -4.7889544, lon: 119.6153925, radius: 1000 },
+  'LBS/Dome T5': { lat: -4.7902978, lon: 119.6163844, radius: 100 },
+  'Gudang Buffer': { lat: -4.7864097, lon: 119.6194399, radius: 1000 },
+  'Dome T4': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Dome T5': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Pintu Keluar T4': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Pintu Keluar T5': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Gudang BKS': { lat: -4.816485, lon: 119.502, radius: 1000 },
+  'Hopper': { lat: -4.81749419956391, lon: 119.48346663528389, radius: 1000 },
+  'Hopper BKS': { lat: -4.817542, lon: 119.483413, radius: 1000 },
+  'Gedung QA': { lat: -4.786468, lon: 119.614094, radius: 100 },
+  'OGS': { lat: -4.7878353, lon: 119.6134088, radius: 100 },
   // === INSPEKSI stations ===
-  'Area Produksi': { lat: -4.786256, lon: 119.614108, radius: 25 },
-  'Gudang Bahan Baku': { lat: -4.786256, lon: 119.614108, radius: 25 },
-  'Ruang Kontrol': { lat: -4.786256, lon: 119.614108, radius: 25 },
-  'Area Conveyor': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Area Produksi': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Gudang Bahan Baku': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Ruang Kontrol': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Area Conveyor': { lat: -4.786256, lon: 119.614108, radius: 100 },
   // === ANALIS stations ===
-  'Laboratorium Utama': { lat: -4.786256, lon: 119.614108, radius: 25 },
-  'Lab Kimia': { lat: -4.786256, lon: 119.614108, radius: 25 },
-  'Lab Fisika': { lat: -4.786256, lon: 119.614108, radius: 25 },
-  'Area Sampling': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Laboratorium Utama': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Lab Kimia': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Lab Fisika': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Area Sampling': { lat: -4.786256, lon: 119.614108, radius: 100 },
 };
 
 const DEFAULT_SETTINGS = {
@@ -177,12 +182,15 @@ if (!localStorage.getItem(INSPEKSI_LOCATIONS_KEY)) {
 if (!localStorage.getItem(ANALIS_LOCATIONS_KEY)) {
   localStorage.setItem(ANALIS_LOCATIONS_KEY, JSON.stringify(DEFAULT_LOCATIONS));
 }
-// Merge station coords: keep user custom edits, but update Biringkassi stations to physical coordinates if using old defaults
+// Merge station coords: keep user custom edits, but update stations with minimum 100m radius and accurate coordinates
 const _existingCoords = JSON.parse(localStorage.getItem(STATION_COORDS_KEY) || '{}');
 const _mergedCoords = { ...DEFAULT_STATION_COORDS, ..._existingCoords };
-['Gudang BKS', 'Hopper', 'Hopper BKS'].forEach(st => {
-  if (!_mergedCoords[st] || Math.abs(_mergedCoords[st].lat - (-4.786256)) < 0.005) {
-    _mergedCoords[st] = DEFAULT_STATION_COORDS[st];
+Object.keys(_mergedCoords).forEach(st => {
+  if (_mergedCoords[st]) {
+    // If radius is less than 100, ensure it is at least 100m (user request)
+    if (!_mergedCoords[st].radius || _mergedCoords[st].radius < 100) {
+      _mergedCoords[st].radius = 100;
+    }
   }
 });
 localStorage.setItem(STATION_COORDS_KEY, JSON.stringify(_mergedCoords));
@@ -382,8 +390,13 @@ export const db = {
   // --- SESSION LOGIN SYSTEM ---
   login(role, username, password, jobdesk = 'suhu') {
     const users = this.getUsers();
-    const user = users.find(u => u.username.toLowerCase() === username.toLowerCase() && u.role === role);
-    if (!user || user.password !== password) {
+    const clean = (s) => (s || '').toString().trim().toLowerCase().replace(/\s+/g, '');
+    const user = users.find(u => u.username.toLowerCase() === username.trim().toLowerCase() && u.role === role);
+    if (!user) return null;
+    
+    // Support exact match, trimmed match, or space-insensitive match (e.g. 'kopkar 123' vs 'kopkar123')
+    const passMatch = user.password === password || user.password === password.trim() || clean(user.password) === clean(password);
+    if (!passMatch) {
       return null;
     }
     
@@ -452,8 +465,29 @@ export const db = {
     }
   },
 
+  getDeletedIds() {
+    try {
+      return JSON.parse(localStorage.getItem(DELETED_IDS_KEY) || '[]');
+    } catch (e) {
+      return [];
+    }
+  },
+
+  addDeletedId(id) {
+    if (!id) return;
+    try {
+      const ids = this.getDeletedIds();
+      if (!ids.includes(id)) {
+        ids.push(id);
+        if (ids.length > 500) ids.shift();
+        localStorage.setItem(DELETED_IDS_KEY, JSON.stringify(ids));
+      }
+    } catch (e) {}
+  },
+
   deleteReport(id) {
     try {
+      this.addDeletedId(id);
       const reports = this.getReports();
       const filtered = reports.filter(r => r.id !== id);
       this._safeSetItem(REPORTS_KEY, filtered);
@@ -467,8 +501,11 @@ export const db = {
 
   async clearAllReports() {
     try {
+      const nowIso = new Date().toISOString();
       localStorage.setItem(REPORTS_KEY, JSON.stringify([]));
+      localStorage.setItem(REPORTS_RESET_KEY, nowIso);
       await this.clearTableFromCloud('reports');
+      this.uploadSettingsToCloud();
       return true;
     } catch (e) {
       console.error('Failed to clear reports:', e);
@@ -480,7 +517,13 @@ export const db = {
   getAttendance() {
     try {
       const data = localStorage.getItem(ATTENDANCE_KEY);
-      return data ? JSON.parse(data).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)) : [];
+      const resetStr = localStorage.getItem(ATTENDANCE_RESET_KEY);
+      const resetTime = resetStr ? new Date(resetStr).getTime() : 0;
+      const deletedIds = new Set(this.getDeletedIds());
+      const parsed = data ? JSON.parse(data) : [];
+      return parsed
+        .filter(a => (!resetTime || new Date(a.timestamp).getTime() > resetTime) && !deletedIds.has(a.id))
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
     } catch (e) {
       console.error('Failed to parse attendance:', e);
       return [];
@@ -509,6 +552,7 @@ export const db = {
 
   deleteAttendance(id) {
     try {
+      this.addDeletedId(id);
       const list = this.getAttendance();
       const filtered = list.filter(a => a.id !== id);
       this._safeSetItem(ATTENDANCE_KEY, filtered);
@@ -537,10 +581,14 @@ export const db = {
 
   async clearAllAttendance() {
     try {
+      const nowIso = new Date().toISOString();
       localStorage.setItem(ATTENDANCE_KEY, JSON.stringify([]));
+      localStorage.setItem(ATTENDANCE_RESET_KEY, nowIso);
       await this.clearTableFromCloud('attendance');
+      this.uploadSettingsToCloud();
       return true;
     } catch (e) {
+      console.error('Failed to clear attendance:', e);
       return false;
     }
   },
@@ -600,6 +648,7 @@ export const db = {
 
   deleteActivity(id) {
     try {
+      this.addDeletedId(id);
       const list = this.getActivities();
       const filtered = list.filter(a => a.id !== id);
       this._safeSetItem(ACTIVITIES_KEY, filtered);
@@ -612,8 +661,11 @@ export const db = {
 
   async clearAllActivities() {
     try {
+      const nowIso = new Date().toISOString();
       localStorage.setItem(ACTIVITIES_KEY, JSON.stringify([]));
+      localStorage.setItem(ACTIVITIES_RESET_KEY, nowIso);
       await this.clearTableFromCloud('activities');
+      this.uploadSettingsToCloud();
       return true;
     } catch (e) {
       return false;
@@ -622,8 +674,11 @@ export const db = {
 
   async clearAllHandovers() {
     try {
+      const nowIso = new Date().toISOString();
       localStorage.setItem(HANDOVERS_KEY, JSON.stringify([]));
+      localStorage.setItem(HANDOVERS_RESET_KEY, nowIso);
       await this.clearTableFromCloud('handovers');
+      this.uploadSettingsToCloud();
       return true;
     } catch (e) {
       return false;
@@ -834,10 +889,12 @@ export const db = {
       const data = localStorage.getItem(STATION_COORDS_KEY);
       const parsed = data ? JSON.parse(data) : {};
       const merged = { ...DEFAULT_STATION_COORDS, ...parsed };
-      // Force update Biringkassi stations to physical coordinates if using old plant fallback (~ -4.786...)
-      ['Gudang BKS', 'Hopper', 'Hopper BKS'].forEach(st => {
-        if (!merged[st] || Math.abs(parseFloat(merged[st].lat) - (-4.786256)) < 0.01) {
-          merged[st] = DEFAULT_STATION_COORDS[st];
+      // Enforce minimum radius of 100m for all stations (User request: radius min 100m)
+      Object.keys(merged).forEach(st => {
+        if (merged[st]) {
+          if (!merged[st].radius || merged[st].radius < 100) {
+            merged[st].radius = 100;
+          }
         }
       });
       return merged;
@@ -1461,8 +1518,8 @@ export const db = {
         dateFilter = `&timestamp=gte.${d.toISOString()}`;
       }
 
-      // 1. Fetch from Supabase (Only recent 2 days to save 99.9% bandwidth)
-      const reportsRes = await fetch(`${url}/rest/v1/reports?select=*${dateFilter}`, { headers });
+      // 1. Fetch from Supabase (Omit heavy base64 image column to save 99.9% bandwidth/egress and avoid localStorage quota limit)
+      const reportsRes = await fetch(`${url}/rest/v1/reports?select=id,timestamp,officer,location,equipment_name,temperature,notes,status,jobdesk${dateFilter}`, { headers });
       let cloudReports = reportsRes.ok ? await reportsRes.json() : [];
       cloudReports = cloudReports.map(r => ({
         id: r.id,
@@ -1472,12 +1529,12 @@ export const db = {
         equipmentName: r.equipment_name || r.equipmentName || '',
         temperature: r.temperature,
         notes: r.notes || '',
-        image: r.image || '',
+        image: '',
         status: r.status || 'Normal',
         jobdesk: r.jobdesk || 'suhu'
       }));
 
-      const attRes = await fetch(`${url}/rest/v1/attendance?select=*${dateFilter}`, { headers });
+      const attRes = await fetch(`${url}/rest/v1/attendance?select=id,timestamp,officer,jobdesk,type,image,latitude,longitude,gps_accuracy,is_fake_gps,notes,status,spv_approval,manager_approval${dateFilter}`, { headers });
       let cloudAtt = attRes.ok ? await attRes.json() : [];
       
       // Convert cloud snake_case keys to camelCase for local React state
@@ -1487,7 +1544,7 @@ export const db = {
         officer: a.officer,
         jobdesk: a.jobdesk || 'suhu',
         type: a.type,
-        image: a.image,
+        image: a.image || '',
         latitude: a.latitude,
         longitude: a.longitude,
         gpsAccuracy: a.gps_accuracy,
@@ -1498,8 +1555,16 @@ export const db = {
         managerApproval: a.manager_approval
       }));
 
-      // 2. Merge Reports
-      const localReports = this.getReports();
+      // Active Reset Markers & Tombstones
+      const attResetStr = localStorage.getItem(ATTENDANCE_RESET_KEY);
+      const attResetTime = attResetStr ? new Date(attResetStr).getTime() : 0;
+      const repResetStr = localStorage.getItem(REPORTS_RESET_KEY);
+      const repResetTime = repResetStr ? new Date(repResetStr).getTime() : 0;
+      const deletedIds = new Set(this.getDeletedIds());
+
+      // 2. Merge Reports (Respect reset timestamp and deleted IDs)
+      cloudReports = cloudReports.filter(r => (!repResetTime || new Date(r.timestamp).getTime() > repResetTime) && !deletedIds.has(r.id));
+      const localReports = this.getReports().filter(r => (!repResetTime || new Date(r.timestamp).getTime() > repResetTime) && !deletedIds.has(r.id));
       const mergedReportsMap = new Map();
       
       // Load cloud first
@@ -1512,8 +1577,9 @@ export const db = {
         
       this._safeSetItem(REPORTS_KEY, mergedReports);
 
-      // 3. Merge Attendance
-      const localAtt = this.getAttendance();
+      // 3. Merge Attendance (Respect reset timestamp and deleted IDs)
+      cloudAtt = cloudAtt.filter(a => (!attResetTime || new Date(a.timestamp).getTime() > attResetTime) && !deletedIds.has(a.id));
+      const localAtt = this.getAttendance().filter(a => (!attResetTime || new Date(a.timestamp).getTime() > attResetTime) && !deletedIds.has(a.id));
       const mergedAttMap = new Map();
       
       cloudAtt.forEach(a => mergedAttMap.set(a.id, a));
@@ -1524,9 +1590,14 @@ export const db = {
         
       this._safeSetItem(ATTENDANCE_KEY, mergedAtt);
 
-      // 4. Upload missing local reports to cloud (only recent items if filter active)
+      // 4. Upload missing local reports to cloud (skip deleted/reset records)
       const cloudReportIds = new Set(cloudReports.map(r => r.id));
-      const reportsToUpload = localReports.filter(r => !cloudReportIds.has(r.id) && (!filterDate || new Date(r.timestamp) >= filterDate));
+      const reportsToUpload = localReports.filter(r => 
+        !cloudReportIds.has(r.id) && 
+        (!filterDate || new Date(r.timestamp) >= filterDate) &&
+        (!repResetTime || new Date(r.timestamp).getTime() > repResetTime) &&
+        !deletedIds.has(r.id)
+      );
       
       for (const r of reportsToUpload) {
         const mapped = {
@@ -1548,9 +1619,14 @@ export const db = {
         });
       }
 
-      // 5. Upload missing local attendance to cloud
+      // 5. Upload missing local attendance to cloud (skip deleted/reset records)
       const cloudAttIds = new Set(cloudAtt.map(a => a.id));
-      const attToUpload = localAtt.filter(a => !cloudAttIds.has(a.id) && (!filterDate || new Date(a.timestamp) >= filterDate));
+      const attToUpload = localAtt.filter(a => 
+        !cloudAttIds.has(a.id) && 
+        (!filterDate || new Date(a.timestamp) >= filterDate) &&
+        (!attResetTime || new Date(a.timestamp).getTime() > attResetTime) &&
+        !deletedIds.has(a.id)
+      );
       
       for (const a of attToUpload) {
         const mapped = {
@@ -1559,7 +1635,7 @@ export const db = {
           officer: a.officer,
           jobdesk: a.jobdesk || 'suhu',
           type: a.type,
-          image: null,
+          image: a.type === 'Sakit' ? (a.image || null) : null,
           latitude: a.latitude,
           longitude: a.longitude,
           gps_accuracy: a.gpsAccuracy,
@@ -2005,7 +2081,20 @@ export const db = {
       const dateStr = now.toISOString().split('T')[0];
       const fileName = `${fileNamePrefix}_${dateStr}.xlsx`;
 
-      XLSX.writeFile(wb, fileName);
+      // Universal browser download using Blob (safe across all browsers & PWAs)
+      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=UTF-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', fileName);
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => {
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }, 300);
       return true;
     } catch (e) {
       console.error('Failed to export Excel:', e);
@@ -2133,7 +2222,12 @@ export const db = {
           stationCoords: this.getStationCoords(),
           settings: this.getSettings(),
           deviceLogs: this.getDeviceLogs(),
-          auditResetAt: this.getAuditResetAt()
+          auditResetAt: this.getAuditResetAt(),
+          attendanceResetAt: localStorage.getItem(ATTENDANCE_RESET_KEY) || null,
+          reportsResetAt: localStorage.getItem(REPORTS_RESET_KEY) || null,
+          activitiesResetAt: localStorage.getItem(ACTIVITIES_RESET_KEY) || null,
+          handoversResetAt: localStorage.getItem(HANDOVERS_RESET_KEY) || null,
+          deletedIds: this.getDeletedIds()
         },
         updated_at: new Date().toISOString()
       };
@@ -2165,6 +2259,12 @@ export const db = {
         }
         if (cloudData.stationCoords && typeof cloudData.stationCoords === 'object') {
           const _mergedCoords = { ...DEFAULT_STATION_COORDS, ...cloudData.stationCoords };
+          // Enforce minimum radius of 100m
+          Object.keys(_mergedCoords).forEach(st => {
+            if (_mergedCoords[st] && (!_mergedCoords[st].radius || _mergedCoords[st].radius < 100)) {
+              _mergedCoords[st].radius = 100;
+            }
+          });
           localStorage.setItem(STATION_COORDS_KEY, JSON.stringify(_mergedCoords));
         }
         if (cloudData.settings && typeof cloudData.settings === 'object') {
@@ -2176,6 +2276,30 @@ export const db = {
           if (!localReset || new Date(cloudData.auditResetAt) > new Date(localReset)) {
             localStorage.setItem(AUDIT_RESET_KEY, cloudData.auditResetAt);
           }
+        }
+        if (cloudData.attendanceResetAt) {
+          const localReset = localStorage.getItem(ATTENDANCE_RESET_KEY);
+          if (!localReset || new Date(cloudData.attendanceResetAt) > new Date(localReset)) {
+            localStorage.setItem(ATTENDANCE_RESET_KEY, cloudData.attendanceResetAt);
+            const rTime = new Date(cloudData.attendanceResetAt).getTime();
+            const filteredAtt = this.getAttendance().filter(a => new Date(a.timestamp).getTime() > rTime);
+            this._safeSetItem(ATTENDANCE_KEY, filteredAtt);
+          }
+        }
+        if (cloudData.reportsResetAt) {
+          const localReset = localStorage.getItem(REPORTS_RESET_KEY);
+          if (!localReset || new Date(cloudData.reportsResetAt) > new Date(localReset)) {
+            localStorage.setItem(REPORTS_RESET_KEY, cloudData.reportsResetAt);
+            const rTime = new Date(cloudData.reportsResetAt).getTime();
+            const filteredRep = this.getReports().filter(r => new Date(r.timestamp).getTime() > rTime);
+            this._safeSetItem(REPORTS_KEY, filteredRep);
+          }
+        }
+        if (cloudData.deletedIds && Array.isArray(cloudData.deletedIds)) {
+          const localIds = new Set(this.getDeletedIds());
+          cloudData.deletedIds.forEach(id => localIds.add(id));
+          const arr = Array.from(localIds).slice(-500);
+          localStorage.setItem(DELETED_IDS_KEY, JSON.stringify(arr));
         }
         const effectiveReset = localStorage.getItem(AUDIT_RESET_KEY);
         const resetTime = effectiveReset ? new Date(effectiveReset).getTime() : 0;
