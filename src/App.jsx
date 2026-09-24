@@ -26,7 +26,8 @@ import {
   ClipboardList,
   FlaskConical,
   CheckSquare,
-  Smartphone
+  Smartphone,
+  AlertCircle
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { db } from './utils/db';
@@ -274,6 +275,51 @@ export default function App() {
 
   // Approval tab states
   const [approvalFilter, setApprovalFilter] = useState('Semua'); // 'Semua' | 'Pending SPV' | 'Pending Manager'
+
+  // Custom Universal Confirmation Modal state
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: '',
+    message: '',
+    confirmText: 'Ya, Lanjutkan',
+    cancelText: 'Batal',
+    isDanger: true,
+    isLoading: false,
+    onConfirm: null
+  });
+
+  const openConfirmModal = ({ title, message, confirmText = 'Ya, Hapus Sekarang', cancelText = 'Batal', isDanger = true, onConfirm }) => {
+    setConfirmModal({
+      isOpen: true,
+      title,
+      message,
+      confirmText,
+      cancelText,
+      isDanger,
+      isLoading: false,
+      onConfirm
+    });
+  };
+
+  const closeConfirmModal = () => {
+    setConfirmModal(prev => ({ ...prev, isOpen: false, isLoading: false }));
+  };
+
+  const executeConfirmAction = async () => {
+    if (!confirmModal.onConfirm) {
+      closeConfirmModal();
+      return;
+    }
+    setConfirmModal(prev => ({ ...prev, isLoading: true }));
+    try {
+      await confirmModal.onConfirm();
+    } catch (err) {
+      console.error("Error executing confirm action:", err);
+      showToast("Terjadi kesalahan: " + (err.message || err), "error");
+    } finally {
+      closeConfirmModal();
+    }
+  };
 
   // Refs
   const videoRef = useRef(null);
@@ -591,9 +637,16 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    if (window.confirm("Apakah Anda yakin ingin keluar dari akun?")) {
-      performLogout("Anda telah keluar dari aplikasi.");
-    }
+    openConfirmModal({
+      title: "Konfirmasi Keluar Akun",
+      message: "Apakah Anda yakin ingin keluar dari akun Anda?",
+      confirmText: "Keluar Akun",
+      cancelText: "Batal",
+      isDanger: false,
+      onConfirm: () => {
+        performLogout("Anda telah keluar dari aplikasi.");
+      }
+    });
   };
 
   // 10-Minute Auto-Logout Idle Timer (Tidak ada aktivitas 10 menit = Logout Otomatis)
@@ -1351,28 +1404,49 @@ export default function App() {
   };
 
   const handleDeleteActivity = (id) => {
-    if (window.confirm("Apakah Anda yakin ingin menghapus kegiatan ini?")) {
-      db.deleteActivity(id);
-      setActivities(db.getActivities());
-      showToast("Kegiatan berhasil dihapus.", "success");
-      setSelectedActivity(null);
-    }
+    openConfirmModal({
+      title: "Hapus Data Kegiatan",
+      message: "Apakah Anda yakin ingin menghapus data kegiatan ini?",
+      confirmText: "Ya, Hapus",
+      cancelText: "Batal",
+      isDanger: true,
+      onConfirm: async () => {
+        db.deleteActivity(id);
+        setActivities(db.getActivities());
+        showToast("Kegiatan berhasil dihapus.", "success");
+        setSelectedActivity(null);
+      }
+    });
   };
 
   const handleResetActivities = () => {
-    if (window.confirm("PERINGATAN: Semua data kegiatan akan DIHAPUS PERMANEN dari Cloud dan perangkat. Lanjutkan?")) {
-      db.clearAllActivities();
-      setActivities([]);
-      showToast("Seluruh data kegiatan telah dikosongkan.", "success");
-    }
+    openConfirmModal({
+      title: "Hapus Semua Data Kegiatan",
+      message: "PERINGATAN! Seluruh data kegiatan operasional akan DIHAPUS PERMANEN dari Supabase Cloud dan memori lokal perangkat. Tindakan ini tidak dapat dibatalkan.",
+      confirmText: "Ya, Hapus Semua Kegiatan",
+      cancelText: "Batal",
+      isDanger: true,
+      onConfirm: async () => {
+        await db.clearAllActivities();
+        setActivities([]);
+        showToast("Seluruh data kegiatan telah dikosongkan.", "success");
+      }
+    });
   };
 
   const handleResetHandovers = () => {
-    if (window.confirm("PERINGATAN! Semua data Serah Terima Pekerjaan (Handover) akan DIHAPUS PERMANEN dari Cloud dan perangkat. Lanjutkan?")) {
-      db.clearAllHandovers();
-      setHandovers([]);
-      showToast("Seluruh data Serah Terima Pekerjaan telah dikosongkan.", "success");
-    }
+    openConfirmModal({
+      title: "Hapus Semua Data Handover",
+      message: "PERINGATAN! Seluruh data Serah Terima Pekerjaan (Handover) akan DIHAPUS PERMANEN dari Supabase Cloud dan memori lokal perangkat. Tindakan ini tidak dapat dibatalkan.",
+      confirmText: "Ya, Hapus Semua Handover",
+      cancelText: "Batal",
+      isDanger: true,
+      onConfirm: async () => {
+        await db.clearAllHandovers();
+        setHandovers([]);
+        showToast("Seluruh data Serah Terima Pekerjaan telah dikosongkan.", "success");
+      }
+    });
   };
 
   // --- HANDOVER SUBMISSION HANDLERS ---
@@ -1530,21 +1604,35 @@ export default function App() {
   };
 
   const handleDeleteReport = (id) => {
-    if (window.confirm("Apakah Anda yakin ingin menghapus laporan suhu ini?")) {
-      db.deleteReport(id);
-      setReports(db.getReports());
-      showToast("Laporan berhasil dihapus.", "success");
-      setSelectedReport(null);
-    }
+    openConfirmModal({
+      title: "Hapus Laporan Suhu",
+      message: "Apakah Anda yakin ingin menghapus data laporan suhu ini?",
+      confirmText: "Ya, Hapus",
+      cancelText: "Batal",
+      isDanger: true,
+      onConfirm: async () => {
+        db.deleteReport(id);
+        setReports(db.getReports());
+        showToast("Laporan berhasil dihapus.", "success");
+        setSelectedReport(null);
+      }
+    });
   };
 
   const handleDeleteAttendance = (id) => {
-    if (window.confirm("Apakah Anda yakin ingin menghapus absensi ini?")) {
-      db.deleteAttendance(id);
-      setAttendance(db.getAttendance());
-      showToast("Data absensi berhasil dihapus.", "success");
-      setSelectedAttendance(null);
-    }
+    openConfirmModal({
+      title: "Hapus Data Absensi",
+      message: "Apakah Anda yakin ingin menghapus catatan data absensi ini?",
+      confirmText: "Ya, Hapus",
+      cancelText: "Batal",
+      isDanger: true,
+      onConfirm: async () => {
+        db.deleteAttendance(id);
+        setAttendance(db.getAttendance());
+        showToast("Data absensi berhasil dihapus.", "success");
+        setSelectedAttendance(null);
+      }
+    });
   };
 
   const applyPeriodPreset = (preset, setStart, setEnd, setPresetState) => {
@@ -1651,16 +1739,23 @@ export default function App() {
     }
   };
 
-  const handleClearDeviceAudit = async () => {
-    if (window.confirm("PERINGATAN: Apakah Anda yakin ingin MENGHAPUS seluruh riwayat audit perangkat dan MERESET deteksi titip absen?\n\nTindakan ini akan mengosongkan log perangkat dan membersihkan status deteksi titip absen baik di browser lokal maupun Supabase Cloud.")) {
-      const success = db.clearDeviceAuditHistory();
-      if (success) {
-        showToast("Histori audit perangkat dan deteksi titip absen berhasil dibersihkan!", "success");
-        setSettings({ ...db.getSettings() });
-      } else {
-        showToast("Gagal membersihkan histori audit.", "error");
+  const handleClearDeviceAudit = () => {
+    openConfirmModal({
+      title: "Hapus Histori Audit & Reset Titip Absen",
+      message: "PERINGATAN: Apakah Anda yakin ingin MENGHAPUS seluruh riwayat audit perangkat dan MERESET deteksi titip absen? Tindakan ini akan mengosongkan log perangkat dan membersihkan status deteksi titip absen baik di browser lokal maupun Supabase Cloud.",
+      confirmText: "Ya, Bersihkan Histori Audit",
+      cancelText: "Batal",
+      isDanger: true,
+      onConfirm: async () => {
+        const success = db.clearDeviceAuditHistory();
+        if (success) {
+          showToast("Histori audit perangkat dan deteksi titip absen berhasil dibersihkan!", "success");
+          setSettings({ ...db.getSettings() });
+        } else {
+          showToast("Gagal membersihkan histori audit.", "error");
+        }
       }
-    }
+    });
   };
 
   const handleExportCSV = () => {
@@ -1909,19 +2004,33 @@ export default function App() {
   };
 
   const handleResetData = () => {
-    if (window.confirm("PERINGATAN! Tindakan ini akan menghapus seluruh data laporan suhu secara permanen. Apakah Anda ingin melanjutkan?")) {
-      db.clearAllReports();
-      setReports([]);
-      showToast("Seluruh laporan suhu telah dikosongkan.", "success");
-    }
+    openConfirmModal({
+      title: "Hapus Semua Laporan Suhu",
+      message: "PERINGATAN! Seluruh data laporan pengukuran suhu akan DIHAPUS PERMANEN dari Supabase Cloud dan perangkat lokal. Tindakan ini tidak dapat dibatalkan.",
+      confirmText: "Ya, Hapus Semua Laporan",
+      cancelText: "Batal",
+      isDanger: true,
+      onConfirm: async () => {
+        await db.clearAllReports();
+        setReports([]);
+        showToast("Seluruh laporan suhu telah dikosongkan.", "success");
+      }
+    });
   };
 
   const handleResetAttendance = () => {
-    if (window.confirm("PERINGATAN! Tindakan ini akan menghapus seluruh data absensi secara permanen. Apakah Anda ingin melanjutkan?")) {
-      db.clearAllAttendance();
-      setAttendance([]);
-      showToast("Seluruh data absensi telah dikosongkan.", "success");
-    }
+    openConfirmModal({
+      title: "Hapus Semua Data Absensi",
+      message: "PERINGATAN! Seluruh data riwayat absensi petugas akan DIHAPUS PERMANEN dari Supabase Cloud dan perangkat lokal. Tindakan ini tidak dapat dibatalkan.",
+      confirmText: "Ya, Hapus Semua Absensi",
+      cancelText: "Batal",
+      isDanger: true,
+      onConfirm: async () => {
+        await db.clearAllAttendance();
+        setAttendance([]);
+        showToast("Seluruh data absensi telah dikosongkan.", "success");
+      }
+    });
   };
 
   // --- FILTERS & ANALYTICS ---
@@ -4597,23 +4706,30 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
               <button className="btn btn-secondary" onClick={handleClearDeviceAudit} style={{ width: '100%', borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.05)' }}>
                 <Trash2 size={16} /> Hapus Histori Audit Perangkat & Deteksi Titip Absen
               </button>
-              <button className="btn btn-secondary" onClick={async () => {
-                if (window.confirm("PERINGATAN! Semua gambar/foto yang tersimpan di Cloud dan perangkat akan DIHAPUS PERMANEN untuk menghemat ruang penyimpanan. Data teks (nama, waktu, lokasi) tetap aman. Lanjutkan?")) {
-                  showToast("Sedang menghapus gambar... Harap tunggu.", "success");
-                  try {
-                    const result = await db.stripAllCloudImages();
-                    if (result.success) {
-                      setReports(db.getReports());
-                      setAttendance(db.getAttendance());
-                      setActivities(db.getActivities());
-                      showToast(`Berhasil menghapus ${result.total} gambar dari Cloud & perangkat!`, "success");
-                    } else {
-                      showToast(result.message || "Gagal menghapus gambar.", "error");
+              <button className="btn btn-secondary" onClick={() => {
+                openConfirmModal({
+                  title: "Hapus Semua Gambar (Hemat Egress/Memori)",
+                  message: "PERINGATAN! Semua gambar dan foto yang tersimpan di Supabase Cloud dan memori lokal akan DIHAPUS PERMANEN untuk menghemat ruang dan kuota egress. Data teks (nama, waktu, lokasi, suhu) tetap aman.",
+                  confirmText: "Ya, Hapus Semua Gambar",
+                  cancelText: "Batal",
+                  isDanger: true,
+                  onConfirm: async () => {
+                    showToast("Sedang menghapus gambar... Harap tunggu.", "info");
+                    try {
+                      const result = await db.stripAllCloudImages();
+                      if (result.success) {
+                        setReports(db.getReports());
+                        setAttendance(db.getAttendance());
+                        setActivities(db.getActivities());
+                        showToast(`Berhasil menghapus ${result.total} gambar dari Cloud & perangkat!`, "success");
+                      } else {
+                        showToast(result.message || "Gagal menghapus gambar.", "error");
+                      }
+                    } catch (e) {
+                      showToast("Gagal menghapus gambar: " + e.message, "error");
                     }
-                  } catch (e) {
-                    showToast("Gagal menghapus gambar: " + e.message, "error");
                   }
-                }
+                });
               }} style={{ width: '100%', borderColor: 'rgba(251, 146, 60, 0.4)', color: '#fb923c', background: 'rgba(251, 146, 60, 0.05)' }}>
                 <Trash2 size={16} /> Hapus Semua Gambar (Hemat Memori)
               </button>
@@ -5554,6 +5670,73 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
                 Kirim Catatan Ke Piket
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- UNIVERSAL CONFIRMATION MODAL ----------------- */}
+      {confirmModal.isOpen && (
+        <div className="modal-overlay" style={{ zIndex: 100000 }} onClick={confirmModal.isLoading ? undefined : closeConfirmModal}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '420px', padding: '24px', textAlign: 'center' }}>
+            <div style={{
+              width: '56px',
+              height: '56px',
+              borderRadius: '50%',
+              background: confirmModal.isDanger ? 'rgba(239, 68, 68, 0.15)' : 'rgba(59, 130, 246, 0.15)',
+              color: confirmModal.isDanger ? 'var(--danger)' : 'var(--primary)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 16px auto'
+            }}>
+              {confirmModal.isDanger ? <AlertTriangle size={30} /> : <AlertCircle size={30} />}
+            </div>
+
+            <h3 style={{ fontSize: '1.15rem', fontWeight: '700', marginBottom: '10px', color: 'var(--text-primary)' }}>
+              {confirmModal.title}
+            </h3>
+
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: '1.5', marginBottom: '22px', whiteSpace: 'pre-line' }}>
+              {confirmModal.message}
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={closeConfirmModal}
+                disabled={confirmModal.isLoading}
+                style={{ padding: '10px' }}
+              >
+                {confirmModal.cancelText || 'Batal'}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={executeConfirmAction}
+                disabled={confirmModal.isLoading}
+                style={{
+                  padding: '10px',
+                  background: confirmModal.isDanger ? 'var(--danger)' : 'var(--primary)',
+                  color: '#fff',
+                  border: 'none',
+                  fontWeight: '600',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px'
+                }}
+              >
+                {confirmModal.isLoading ? (
+                  <>
+                    <RefreshCw size={16} className="spin" />
+                    <span>Memproses...</span>
+                  </>
+                ) : (
+                  confirmModal.confirmText || 'Ya, Lanjutkan'
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

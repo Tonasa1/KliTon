@@ -150,6 +150,7 @@ h1, h2, h3, h4, h5, h6 {
 /* Page Content Base */
 .page-content {
   padding: 16px;
+  padding-bottom: 120px;
   overflow-y: auto;
   flex: 1;
 }
