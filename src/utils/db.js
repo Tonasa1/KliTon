@@ -1,6 +1,7 @@
 // Local Database utilities for ThermaScan using localStorage
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
+import * as XLSX from 'xlsx';
 const REPORTS_KEY = 'thermascan_reports';
 const LOCATIONS_KEY = 'thermascan_locations';
 const SETTINGS_KEY = 'thermascan_settings';
@@ -12,6 +13,8 @@ const INSPEKSI_LOCATIONS_KEY = 'thermascan_inspeksi_locations';
 const ANALIS_LOCATIONS_KEY = 'thermascan_analis_locations';
 const STATION_COORDS_KEY = 'thermascan_station_coords';
 const HANDOVERS_KEY = 'thermascan_handovers';
+const DEVICE_LOGS_KEY = 'thermascan_device_logs';
+const AUDIT_RESET_KEY = 'thermascan_audit_reset_at';
 
 const DEFAULT_OFFICERS = [
   'FAHRIL',
@@ -27,6 +30,7 @@ const DEFAULT_USERS = [
   { username: 'supervisor', role: 'Supervisor', password: 'spv123', jobdesk: 'suhu' },
   { username: 'supervisor1', role: 'Supervisor', password: 'spv123', jobdesk: 'analis' },
   { username: 'manager1', role: 'Manager', password: 'manager123', jobdesk: 'suhu' },
+  { username: 'KOPKAR', role: 'KOPKAR', password: 'kopkar123', jobdesk: 'all' },
   // === SUHU ===
   { username: 'FAHRIL', role: 'Operator', password: 'operator123', jobdesk: 'suhu' },
   { username: 'JUMAHIR', role: 'Operator', password: 'operator123', jobdesk: 'suhu' },
@@ -64,11 +68,15 @@ const DEFAULT_LOCATIONS = [
   'Pintu keluar masuk T45',
   'pintu keluar masuk T23',
   'LBS/Dome T4',
+  'LBS/Dome T5',
   'Gudang Buffer',
   'Dome T4',
   'Dome T5',
   'Gudang BKS',
   'Hopper',
+  'Hopper BKS',
+  'Gedung QA',
+  'OGS',
   'Area Produksi',
   'Gudang Bahan Baku',
   'Ruang Kontrol',
@@ -83,32 +91,36 @@ const DEFAULT_LOCATIONS = [
 // Koordinat GPS per stasiun kerja (Opsi B - geofence per lokasi)
 const DEFAULT_STATION_COORDS = {
   // === SUHU stations ===
-  'Pintu Keluar T4': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Pintu Keluar T5': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Pintu keluar masuk T45': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'pintu keluar masuk T23': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'LBS/Dome T4': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Gudang Buffer': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Dome T4': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Dome T5': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Gudang BKS': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Hopper': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Pintu Keluar T4': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Pintu Keluar T5': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Pintu keluar masuk T45': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'pintu keluar masuk T23': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'LBS/Dome T4': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'LBS/Dome T5': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Gudang Buffer': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Dome T4': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Dome T5': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Gudang BKS': { lat: -4.81749419956391, lon: 119.48346663528389, radius: 100 },
+  'Hopper': { lat: -4.81749419956391, lon: 119.48346663528389, radius: 100 },
+  'Hopper BKS': { lat: -4.81749419956391, lon: 119.48346663528389, radius: 100 },
+  'Gedung QA': { lat: -4.786429, lon: 119.614090, radius: 20 },
+  'OGS': { lat: -4.786256, lon: 119.614108, radius: 25 },
   // === INSPEKSI stations ===
-  'Area Produksi': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Gudang Bahan Baku': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Ruang Kontrol': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Area Conveyor': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Area Produksi': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Gudang Bahan Baku': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Ruang Kontrol': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Area Conveyor': { lat: -4.786256, lon: 119.614108, radius: 25 },
   // === ANALIS stations ===
-  'Laboratorium Utama': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Lab Kimia': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Lab Fisika': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Area Sampling': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'Laboratorium Utama': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Lab Kimia': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Lab Fisika': { lat: -4.786256, lon: 119.614108, radius: 25 },
+  'Area Sampling': { lat: -4.786256, lon: 119.614108, radius: 25 },
 };
 
 const DEFAULT_SETTINGS = {
   highTempAlert: 60.0,
   feverTempAlert: 80.0,
-  enableGeofence: false,
+  enableGeofence: true,
   // 1. Suhu - Day Shift & Piket
   geofenceSuhuDayLat: -4.786256,
   geofenceSuhuDayLon: 119.614108,
@@ -135,7 +147,7 @@ if (!localStorage.getItem(OFFICERS_KEY)) {
 const _existingUsers = JSON.parse(localStorage.getItem(USERS_KEY) || '[]');
 const _mergedUsers = [..._existingUsers];
 DEFAULT_USERS.forEach(defUser => {
-  const idx = _mergedUsers.findIndex(u => u.username === defUser.username);
+  const idx = _mergedUsers.findIndex(u => u.username.toLowerCase() === defUser.username.toLowerCase());
   if (idx === -1) {
     _mergedUsers.push(defUser); // tambah user baru
   } else {
@@ -165,13 +177,21 @@ if (!localStorage.getItem(INSPEKSI_LOCATIONS_KEY)) {
 if (!localStorage.getItem(ANALIS_LOCATIONS_KEY)) {
   localStorage.setItem(ANALIS_LOCATIONS_KEY, JSON.stringify(DEFAULT_LOCATIONS));
 }
-// Merge station coords: keep existing user edits, add new defaults
+// Merge station coords: keep user custom edits, but update Biringkassi stations to physical coordinates if using old defaults
 const _existingCoords = JSON.parse(localStorage.getItem(STATION_COORDS_KEY) || '{}');
 const _mergedCoords = { ...DEFAULT_STATION_COORDS, ..._existingCoords };
+['Gudang BKS', 'Hopper', 'Hopper BKS'].forEach(st => {
+  if (!_mergedCoords[st] || Math.abs(_mergedCoords[st].lat - (-4.786256)) < 0.005) {
+    _mergedCoords[st] = DEFAULT_STATION_COORDS[st];
+  }
+});
 localStorage.setItem(STATION_COORDS_KEY, JSON.stringify(_mergedCoords));
 
 if (!localStorage.getItem(HANDOVERS_KEY)) {
   localStorage.setItem(HANDOVERS_KEY, JSON.stringify([]));
+}
+if (!localStorage.getItem(DEVICE_LOGS_KEY)) {
+  localStorage.setItem(DEVICE_LOGS_KEY, JSON.stringify([]));
 }
 
 export const db = {
@@ -201,6 +221,164 @@ export const db = {
     }
   },
 
+  // --- DEVICE & MULTI-ACCOUNT AUDIT ---
+  getDeviceId() {
+    let id = localStorage.getItem('thermascan_device_id');
+    if (!id) {
+      id = 'dev_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 5);
+      localStorage.setItem('thermascan_device_id', id);
+    }
+    return id;
+  },
+
+  getDeviceLogs() {
+    try {
+      const data = localStorage.getItem(DEVICE_LOGS_KEY);
+      return data ? JSON.parse(data) : [];
+    } catch (e) {
+      return [];
+    }
+  },
+
+  recordDeviceLog(username, role, action = 'Login') {
+    if (!username) return;
+    try {
+      const logs = this.getDeviceLogs();
+      const newLog = {
+        id: 'dlog_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+        deviceId: this.getDeviceId(),
+        username,
+        role: role || 'Operator',
+        action,
+        timestamp: new Date().toISOString()
+      };
+      logs.unshift(newLog);
+      const trimmed = logs.slice(0, 200);
+      this._safeSetItem(DEVICE_LOGS_KEY, trimmed);
+      this.uploadSettingsToCloud();
+    } catch (e) {
+      console.error('Failed to record device log:', e);
+    }
+  },
+
+  getAuditResetAt() {
+    return localStorage.getItem(AUDIT_RESET_KEY) || null;
+  },
+
+  clearDeviceAuditHistory() {
+    try {
+      const now = new Date().toISOString();
+      localStorage.setItem(DEVICE_LOGS_KEY, JSON.stringify([]));
+      localStorage.setItem(AUDIT_RESET_KEY, now);
+
+      // Clean deviceId from local records so old local records don't re-trigger
+      const cleanDevIds = (key) => {
+        try {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const arr = JSON.parse(raw);
+            let changed = false;
+            arr.forEach(item => {
+              if (item.deviceId) {
+                delete item.deviceId;
+                changed = true;
+              }
+              if (item.senderDeviceId) {
+                delete item.senderDeviceId;
+                changed = true;
+              }
+              if (item.receiverDeviceId) {
+                delete item.receiverDeviceId;
+                changed = true;
+              }
+            });
+            if (changed) localStorage.setItem(key, JSON.stringify(arr));
+          }
+        } catch (e) {}
+      };
+      cleanDevIds(ATTENDANCE_KEY);
+      cleanDevIds(REPORTS_KEY);
+      cleanDevIds(ACTIVITIES_KEY);
+      cleanDevIds(HANDOVERS_KEY);
+
+      this.uploadSettingsToCloud();
+      return true;
+    } catch (e) {
+      console.error('Failed to clear device audit history:', e);
+      return false;
+    }
+  },
+
+  getMultiAccountAudit() {
+    const logs = this.getDeviceLogs();
+    const attendance = this.getAttendance();
+    const reports = this.getReports();
+    const activities = this.getActivities();
+    const handovers = this.getHandovers();
+
+    const resetAtStr = this.getAuditResetAt();
+    const resetTime = resetAtStr ? new Date(resetAtStr).getTime() : 0;
+
+    const deviceMap = new Map();
+
+    const processEntry = (deviceId, username, role, action, timestamp) => {
+      if (!deviceId || !username) return;
+      if (resetTime && timestamp && new Date(timestamp).getTime() <= resetTime) return; // Skip records prior to reset
+      if (role && role !== 'Operator') return; // Focus audit on Operator accounts
+
+      if (!deviceMap.has(deviceId)) {
+        deviceMap.set(deviceId, {
+          deviceId,
+          users: new Map(),
+          firstSeen: timestamp,
+          lastActive: timestamp
+        });
+      }
+      const dev = deviceMap.get(deviceId);
+      if (new Date(timestamp) > new Date(dev.lastActive)) dev.lastActive = timestamp;
+      if (new Date(timestamp) < new Date(dev.firstSeen)) dev.firstSeen = timestamp;
+
+      if (!dev.users.has(username)) {
+        dev.users.set(username, { name: username, count: 1, lastActive: timestamp, lastAction: action });
+      } else {
+        const u = dev.users.get(username);
+        u.count++;
+        if (new Date(timestamp) > new Date(u.lastActive)) {
+          u.lastActive = timestamp;
+          u.lastAction = action;
+        }
+      }
+    };
+
+    logs.forEach(l => processEntry(l.deviceId, l.username, l.role, l.action || 'Login', l.timestamp));
+    attendance.forEach(a => processEntry(a.deviceId, a.officer, 'Operator', `Absen ${a.type || ''}`, a.timestamp));
+    reports.forEach(r => processEntry(r.deviceId, r.officer, 'Operator', `Input Suhu (${r.location || ''})`, r.timestamp));
+    activities.forEach(act => processEntry(act.deviceId, act.officer, 'Operator', 'Input Kegiatan', act.timestamp));
+    handovers.forEach(h => {
+      if (h.senderName) processEntry(h.senderDeviceId || h.deviceId, h.senderName, 'Operator', 'Kirim Serah Terima', h.sentAt || h.timestamp);
+      if (h.receiverName) processEntry(h.receiverDeviceId || h.deviceId, h.receiverName, 'Operator', 'Terima Serah Terima', h.receivedAt || h.timestamp);
+    });
+
+    const result = [];
+    deviceMap.forEach((dev, key) => {
+      const userList = Array.from(dev.users.values());
+      const isMulti = userList.length > 1;
+      result.push({
+        deviceId: key,
+        userCount: userList.length,
+        isMultiAccount: isMulti,
+        users: userList,
+        lastActive: dev.lastActive,
+        firstSeen: dev.firstSeen
+      });
+    });
+
+    return result.sort((a, b) => {
+      if (a.isMultiAccount !== b.isMultiAccount) return b.isMultiAccount ? -1 : 1;
+      return new Date(b.lastActive) - new Date(a.lastActive);
+    });
+  },
+
   // --- SESSION LOGIN SYSTEM ---
   login(role, username, password, jobdesk = 'suhu') {
     const users = this.getUsers();
@@ -223,9 +401,10 @@ export const db = {
     const session = { 
       role, 
       name: user.username, 
-      jobdesk: role === 'Supervisor' && username.toLowerCase() === 'supervisor1' ? 'analis' : jobdesk 
+      jobdesk: role === 'KOPKAR' ? 'all' : (role === 'Supervisor' && username.toLowerCase() === 'supervisor1' ? 'analis' : jobdesk) 
     };
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    this.recordDeviceLog(user.username, user.role, 'Login Aplikasi');
     return session;
   },
 
@@ -259,10 +438,12 @@ export const db = {
       const newReport = {
         id: `rep_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         timestamp: new Date().toISOString(),
+        deviceId: this.getDeviceId(),
         ...report
       };
       reports.push(newReport);
       this._safeSetItem(REPORTS_KEY, reports);
+      this.recordDeviceLog(newReport.officer, 'Operator', `Input Suhu (${newReport.location || ''})`);
       this.uploadReportToCloud(newReport); // Upload to Supabase in background
       return newReport;
     } catch (e) {
@@ -276,6 +457,7 @@ export const db = {
       const reports = this.getReports();
       const filtered = reports.filter(r => r.id !== id);
       this._safeSetItem(REPORTS_KEY, filtered);
+      this.deleteRecordFromCloud('reports', id);
       return true;
     } catch (e) {
       console.error('Failed to delete report:', e);
@@ -283,9 +465,10 @@ export const db = {
     }
   },
 
-  clearAllReports() {
+  async clearAllReports() {
     try {
       localStorage.setItem(REPORTS_KEY, JSON.stringify([]));
+      await this.clearTableFromCloud('reports');
       return true;
     } catch (e) {
       console.error('Failed to clear reports:', e);
@@ -310,10 +493,12 @@ export const db = {
       const newEntry = {
         id: `att_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         timestamp: new Date().toISOString(),
+        deviceId: this.getDeviceId(),
         ...attendance
       };
       list.push(newEntry);
       this._safeSetItem(ATTENDANCE_KEY, list);
+      this.recordDeviceLog(newEntry.officer, 'Operator', `Absen ${newEntry.type || ''}`);
       this.uploadAttendanceToCloud(newEntry); // Upload to Supabase in background
       return newEntry;
     } catch (e) {
@@ -327,6 +512,7 @@ export const db = {
       const list = this.getAttendance();
       const filtered = list.filter(a => a.id !== id);
       this._safeSetItem(ATTENDANCE_KEY, filtered);
+      this.deleteRecordFromCloud('attendance', id);
       return true;
     } catch (e) {
       return false;
@@ -349,9 +535,10 @@ export const db = {
     }
   },
 
-  clearAllAttendance() {
+  async clearAllAttendance() {
     try {
       localStorage.setItem(ATTENDANCE_KEY, JSON.stringify([]));
+      await this.clearTableFromCloud('attendance');
       return true;
     } catch (e) {
       return false;
@@ -375,10 +562,12 @@ export const db = {
       const newEntry = {
         id: `act_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         timestamp: new Date().toISOString(),
+        deviceId: this.getDeviceId(),
         ...activity
       };
       list.push(newEntry);
       this._safeSetItem(ACTIVITIES_KEY, list);
+      this.recordDeviceLog(newEntry.officer, 'Operator', 'Input Kegiatan');
       this.uploadActivityToCloud(newEntry);
       return newEntry;
     } catch (e) {
@@ -387,20 +576,54 @@ export const db = {
     }
   },
 
+  async deleteRecordFromCloud(table, id) {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return;
+    try {
+      const headers = { 'apikey': key, 'Authorization': `Bearer ${key}` };
+      await fetch(`${url}/rest/v1/${table}?id=eq.${id}`, { method: 'DELETE', headers });
+    } catch (e) {
+      console.error(`Failed to delete record from cloud table ${table}:`, e);
+    }
+  },
+
+  async clearTableFromCloud(table) {
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return;
+    try {
+      const headers = { 'apikey': key, 'Authorization': `Bearer ${key}` };
+      await fetch(`${url}/rest/v1/${table}?id=not.is.null`, { method: 'DELETE', headers });
+    } catch (e) {
+      console.error(`Failed to clear cloud table ${table}:`, e);
+    }
+  },
+
   deleteActivity(id) {
     try {
       const list = this.getActivities();
       const filtered = list.filter(a => a.id !== id);
       this._safeSetItem(ACTIVITIES_KEY, filtered);
+      this.deleteRecordFromCloud('activities', id);
       return true;
     } catch (e) {
       return false;
     }
   },
 
-  clearAllActivities() {
+  async clearAllActivities() {
     try {
       localStorage.setItem(ACTIVITIES_KEY, JSON.stringify([]));
+      await this.clearTableFromCloud('activities');
+      return true;
+    } catch (e) {
+      return false;
+    }
+  },
+
+  async clearAllHandovers() {
+    try {
+      localStorage.setItem(HANDOVERS_KEY, JSON.stringify([]));
+      await this.clearTableFromCloud('handovers');
       return true;
     } catch (e) {
       return false;
@@ -425,10 +648,12 @@ export const db = {
         id: `ho_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         sentAt: new Date().toISOString(),
         status: 'pending',
+        senderDeviceId: this.getDeviceId(),
         ...handover
       };
       list.push(newEntry);
       this._safeSetItem(HANDOVERS_KEY, list);
+      this.recordDeviceLog(newEntry.senderName, 'Operator', 'Kirim Serah Terima');
       this.uploadHandoverToCloud(newEntry);
       return newEntry;
     } catch (e) {
@@ -607,15 +832,24 @@ export const db = {
   getStationCoords() {
     try {
       const data = localStorage.getItem(STATION_COORDS_KEY);
-      return data ? JSON.parse(data) : DEFAULT_STATION_COORDS;
+      const parsed = data ? JSON.parse(data) : {};
+      const merged = { ...DEFAULT_STATION_COORDS, ...parsed };
+      // Force update Biringkassi stations to physical coordinates if using old plant fallback (~ -4.786...)
+      ['Gudang BKS', 'Hopper', 'Hopper BKS'].forEach(st => {
+        if (!merged[st] || Math.abs(parseFloat(merged[st].lat) - (-4.786256)) < 0.01) {
+          merged[st] = DEFAULT_STATION_COORDS[st];
+        }
+      });
+      return merged;
     } catch (e) {
       return DEFAULT_STATION_COORDS;
     }
   },
 
   getStationCoord(stationName) {
+    if (!stationName) return null;
     const coords = this.getStationCoords();
-    return coords[stationName] || null;
+    return coords[stationName] || DEFAULT_STATION_COORDS[stationName] || null;
   },
 
   saveStationCoord(stationName, lat, lon, radius) {
@@ -710,6 +944,28 @@ export const db = {
     return true;
   },
 
+  exportToExcel(reports) {
+    if (!reports || reports.length === 0) return false;
+    const headers = ['ID Laporan', 'Waktu Pengukuran', 'Suhu (°C)', 'Status', 'Lokasi', 'Nama Petugas', 'Catatan'];
+    const rows = reports.map(r => {
+      const statusObj = this.getTemperatureStatus(r.temperature);
+      const formattedDate = new Date(r.timestamp).toLocaleString('id-ID', {
+        dateStyle: 'medium',
+        timeStyle: 'medium'
+      });
+      return [
+        r.id,
+        formattedDate,
+        Number(r.temperature),
+        statusObj.label,
+        r.location || '-',
+        r.officer || '-',
+        r.notes ? r.notes.replace(/\n/g, ' ') : '-'
+      ];
+    });
+    return this.downloadExcel(headers, rows, 'Laporan Suhu', 'Laporan_Suhu_ThermaScan');
+  },
+
   exportAttendanceToCSV(attendanceList) {
     if (!attendanceList || attendanceList.length === 0) return false;
 
@@ -746,6 +1002,31 @@ export const db = {
     return true;
   },
 
+  exportAttendanceToExcel(attendanceList) {
+    if (!attendanceList || attendanceList.length === 0) return false;
+    const headers = ['ID Absen', 'Waktu Absen', 'Nama Petugas', 'Tipe Absensi', 'Latitude', 'Longitude', 'Akurasi GPS (m)', 'Link Google Maps', 'Terindikasi Fake GPS', 'Keterangan/Alasan'];
+    const rows = attendanceList.map(a => {
+      const formattedDate = new Date(a.timestamp).toLocaleString('id-ID', {
+        dateStyle: 'medium',
+        timeStyle: 'medium'
+      });
+      const mapsLink = a.latitude && a.longitude ? `https://www.google.com/maps?q=${a.latitude},${a.longitude}` : '-';
+      return [
+        a.id,
+        formattedDate,
+        a.officer || '-',
+        a.type || '-',
+        a.latitude || '-',
+        a.longitude || '-',
+        a.gpsAccuracy || '-',
+        mapsLink,
+        a.isFakeGps ? 'YA' : 'TIDAK',
+        a.notes ? a.notes.replace(/\n/g, ' ') : '-'
+      ];
+    });
+    return this.downloadExcel(headers, rows, 'Data Absensi', 'Laporan_Absensi_ThermaScan');
+  },
+
   exportActivitiesToCSV(activities) {
     if (!activities || activities.length === 0) return false;
 
@@ -774,6 +1055,88 @@ export const db = {
 
     this.downloadFile(csvContent, 'Laporan_Kegiatan_ThermaScan');
     return true;
+  },
+
+  exportActivitiesToExcel(activities) {
+    if (!activities || activities.length === 0) return false;
+    const headers = ['ID Kegiatan', 'Waktu', 'Jobdesk', 'Nama Petugas', 'Lokasi', 'Keterangan Kegiatan', 'Catatan Tambahan'];
+    const rows = activities.map(a => {
+      const formattedDate = new Date(a.timestamp).toLocaleString('id-ID', {
+        dateStyle: 'medium',
+        timeStyle: 'medium'
+      });
+      return [
+        a.id,
+        formattedDate,
+        a.jobdesk || '-',
+        a.officer || '-',
+        a.location || '-',
+        a.description ? a.description.replace(/\n/g, ' ') : '-',
+        a.notes ? a.notes.replace(/\n/g, ' ') : '-'
+      ];
+    });
+    return this.downloadExcel(headers, rows, 'Data Kegiatan', 'Laporan_Kegiatan_ThermaScan');
+  },
+
+  exportHandoversToCSV(handovers) {
+    if (!handovers || handovers.length === 0) return false;
+
+    const headers = ['ID Handover', 'Waktu Kirim', 'Jobdesk', 'Shift Asal', 'Shift Tujuan', 'Nama Pengirim', 'Stasiun Pengirim', 'Nama Penerima', 'Stasiun Penerima', 'Waktu Diterima', 'Ringkasan', 'Masalah/Kendala', 'Catatan', 'Status'];
+
+    const rows = handovers.map(h => {
+      const formattedSentAt = h.sentAt ? new Date(h.sentAt).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'medium' }) : '-';
+      const formattedReceivedAt = h.receivedAt ? new Date(h.receivedAt).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'medium' }) : '-';
+      return [
+        h.id,
+        formattedSentAt,
+        h.jobdesk || '-',
+        h.shiftFrom || '-',
+        h.shiftTo || '-',
+        h.senderName || '-',
+        h.senderStation || '-',
+        h.receiverName || '-',
+        h.receiverStation || '-',
+        formattedReceivedAt,
+        h.summary ? h.summary.replace(/\n/g, ' ') : '-',
+        h.issues ? h.issues.replace(/\n/g, ' ') : '-',
+        h.notes ? h.notes.replace(/\n/g, ' ') : '-',
+        h.status || '-'
+      ];
+    });
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))
+    ].join('\r\n');
+
+    this.downloadFile(csvContent, 'Laporan_Handover_ThermaScan');
+    return true;
+  },
+
+  exportHandoversToExcel(handovers) {
+    if (!handovers || handovers.length === 0) return false;
+    const headers = ['ID Handover', 'Waktu Kirim', 'Jobdesk', 'Shift Asal', 'Shift Tujuan', 'Nama Pengirim', 'Stasiun Pengirim', 'Nama Penerima', 'Stasiun Penerima', 'Waktu Diterima', 'Ringkasan', 'Masalah/Kendala', 'Catatan', 'Status'];
+    const rows = handovers.map(h => {
+      const formattedSentAt = h.sentAt ? new Date(h.sentAt).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'medium' }) : '-';
+      const formattedReceivedAt = h.receivedAt ? new Date(h.receivedAt).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'medium' }) : '-';
+      return [
+        h.id,
+        formattedSentAt,
+        h.jobdesk || '-',
+        h.shiftFrom || '-',
+        h.shiftTo || '-',
+        h.senderName || '-',
+        h.senderStation || '-',
+        h.receiverName || '-',
+        h.receiverStation || '-',
+        formattedReceivedAt,
+        h.summary ? h.summary.replace(/\n/g, ' ') : '-',
+        h.issues ? h.issues.replace(/\n/g, ' ') : '-',
+        h.notes ? h.notes.replace(/\n/g, ' ') : '-',
+        h.status || '-'
+      ];
+    });
+    return this.downloadExcel(headers, rows, 'Data Handover', 'Laporan_Handover_ThermaScan');
   },
 
   exportToPDF(reports) {
@@ -888,6 +1251,149 @@ export const db = {
     return true;
   },
 
+  exportHandoversToPDF(handovers) {
+    if (!handovers || handovers.length === 0) return false;
+    const doc = new jsPDF('landscape');
+    
+    doc.setFontSize(16);
+    doc.text('Laporan Serah Terima Pekerjaan (Handover) ThermaScan', 14, 15);
+    doc.setFontSize(10);
+    doc.text(`Waktu Cetak: ${new Date().toLocaleString('id-ID')}`, 14, 22);
+
+    const tableData = handovers.map(h => [
+      h.sentAt ? new Date(h.sentAt).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '-',
+      h.jobdesk || '-',
+      `${h.shiftFrom || '-'} -> ${h.shiftTo || '-'}`,
+      h.senderName || '-',
+      h.receiverName || 'Menunggu',
+      h.summary || '-',
+      h.status || 'pending'
+    ]);
+
+    doc.autoTable({
+      startY: 28,
+      head: [['Waktu Kirim', 'Jobdesk', 'Shift', 'Pengirim', 'Penerima', 'Ringkasan', 'Status']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [59, 130, 246] }
+    });
+
+    doc.save('Laporan_Handover_ThermaScan.pdf');
+    return true;
+  },
+
+  exportAuditToCSV(auditList) {
+    if (!auditList || auditList.length === 0) return false;
+
+    const headers = [
+      'ID Perangkat',
+      'Status Audit',
+      'Jumlah Operator Terdeteksi',
+      'Daftar Operator (Aktivitas Terakhir)',
+      'Pertama Terlihat',
+      'Aktivitas Terakhir',
+      'Catatan Kesimpulan'
+    ];
+
+    const rows = auditList.map(dev => {
+      const userDetail = dev.users.map(u => `${u.name} (${u.count}x ${u.lastAction || 'Aktivitas'})`).join('; ');
+      const formattedFirst = dev.firstSeen ? new Date(dev.firstSeen).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '-';
+      const formattedLast = dev.lastActive ? new Date(dev.lastActive).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '-';
+      const statusLabel = dev.isMultiAccount ? 'TERINDIKASI TITIP ABSEN (MULTI-AKUN)' : 'STERIL (1 AKUN)';
+      const notes = dev.isMultiAccount 
+        ? `PERINGATAN: Perangkat digunakan oleh ${dev.userCount} akun operator berbeda. Perlu konfirmasi fisik.`
+        : 'Perangkat normal, hanya digunakan oleh 1 operator.';
+
+      return [
+        dev.deviceId,
+        statusLabel,
+        dev.userCount,
+        userDetail,
+        formattedFirst,
+        formattedLast,
+        notes
+      ];
+    });
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))
+    ].join('\r\n');
+
+    this.downloadFile(csvContent, 'Laporan_Audit_Perangkat_Titip_Absen');
+    return true;
+  },
+
+  exportAuditToExcel(auditList) {
+    if (!auditList || auditList.length === 0) return false;
+    const headers = [
+      'ID Perangkat (Device ID / Hardware)',
+      'Status Indikasi Titip Absen',
+      'Jumlah Akun Terdeteksi',
+      'Rincian Operator Pengguna',
+      'Pertama Kali Terdeteksi',
+      'Aktivitas Terakhir',
+      'Catatan Kesimpulan'
+    ];
+
+    const rows = auditList.map(dev => {
+      const userDetail = dev.users.map(u => `${u.name} (${u.count}x ${u.lastAction || 'Aktivitas'})`).join('; ');
+      const formattedFirst = dev.firstSeen ? new Date(dev.firstSeen).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '-';
+      const formattedLast = dev.lastActive ? new Date(dev.lastActive).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '-';
+      const statusLabel = dev.isMultiAccount ? 'TERINDIKASI TITIP ABSEN (MULTI-AKUN)' : 'STERIL (1 AKUN)';
+      const notes = dev.isMultiAccount 
+        ? `PERINGATAN: Perangkat digunakan oleh ${dev.userCount} akun operator berbeda. Perlu konfirmasi fisik.`
+        : 'Perangkat normal, hanya digunakan oleh 1 operator.';
+
+      return [
+        dev.deviceId,
+        statusLabel,
+        dev.userCount,
+        userDetail,
+        formattedFirst,
+        formattedLast,
+        notes
+      ];
+    });
+
+    return this.downloadExcel(headers, rows, 'Audit Perangkat', 'Laporan_Audit_Perangkat_Titip_Absen');
+  },
+
+  exportAuditToPDF(auditList) {
+    if (!auditList || auditList.length === 0) return false;
+    const doc = new jsPDF('landscape');
+    
+    doc.setFontSize(16);
+    doc.text('Laporan Audit Perangkat & Deteksi Titip Absen ThermaScan', 14, 15);
+    doc.setFontSize(10);
+    doc.text(`Waktu Cetak: ${new Date().toLocaleString('id-ID')}`, 14, 22);
+
+    const multiCount = auditList.filter(d => d.isMultiAccount).length;
+    doc.setFontSize(10);
+    doc.setTextColor(multiCount > 0 ? 239 : 16, multiCount > 0 ? 68 : 185, multiCount > 0 ? 68 : 129);
+    doc.text(`Ringkasan: ${auditList.length} Perangkat diaudit | ${multiCount} Terindikasi Multi-Akun (Titip Absen)`, 14, 28);
+    doc.setTextColor(0, 0, 0);
+
+    const tableData = auditList.map(dev => [
+      dev.deviceId,
+      dev.isMultiAccount ? 'TERINDIKASI' : 'STERIL',
+      `${dev.userCount} Operator`,
+      dev.users.map(u => `${u.name} (${u.count}x)`).join(', '),
+      dev.lastActive ? new Date(dev.lastActive).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' }) : '-'
+    ]);
+
+    doc.autoTable({
+      startY: 34,
+      head: [['ID Perangkat', 'Status', 'Jumlah Akun', 'Daftar Operator Terdeteksi', 'Aktivitas Terakhir']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [220, 38, 38] }
+    });
+
+    doc.save('Laporan_Audit_Perangkat_Titip_Absen.pdf');
+    return true;
+  },
+
   // --- CLOUD SYNC CONFIG (SUPABASE) ---
   getSupabaseConfig() {
     const DEFAULT_URL = 'https://xevvfgbzmybyehlaiisx.supabase.co';
@@ -933,7 +1439,7 @@ export const db = {
     }
   },
 
-  async syncWithCloud() {
+  async syncWithCloud(days = 2) {
     const { url, key } = this.getSupabaseConfig();
     if (!url || !key) return null;
 
@@ -945,8 +1451,18 @@ export const db = {
         'Prefer': 'return=representation'
       };
 
-      // 1. Fetch from Supabase
-      const reportsRes = await fetch(`${url}/rest/v1/reports?select=*`, { headers });
+      // Super Egress Saver: default to last 2 days of cloud data
+      let dateFilter = '';
+      let filterDate = null;
+      if (days && days !== 'all') {
+        const d = new Date();
+        d.setDate(d.getDate() - (parseInt(days, 10) || 2));
+        filterDate = d;
+        dateFilter = `&timestamp=gte.${d.toISOString()}`;
+      }
+
+      // 1. Fetch from Supabase (Only recent 2 days to save 99.9% bandwidth)
+      const reportsRes = await fetch(`${url}/rest/v1/reports?select=*${dateFilter}`, { headers });
       let cloudReports = reportsRes.ok ? await reportsRes.json() : [];
       cloudReports = cloudReports.map(r => ({
         id: r.id,
@@ -961,7 +1477,7 @@ export const db = {
         jobdesk: r.jobdesk || 'suhu'
       }));
 
-      const attRes = await fetch(`${url}/rest/v1/attendance?select=*`, { headers });
+      const attRes = await fetch(`${url}/rest/v1/attendance?select=*${dateFilter}`, { headers });
       let cloudAtt = attRes.ok ? await attRes.json() : [];
       
       // Convert cloud snake_case keys to camelCase for local React state
@@ -1008,9 +1524,9 @@ export const db = {
         
       this._safeSetItem(ATTENDANCE_KEY, mergedAtt);
 
-      // 4. Upload missing local reports to cloud
+      // 4. Upload missing local reports to cloud (only recent items if filter active)
       const cloudReportIds = new Set(cloudReports.map(r => r.id));
-      const reportsToUpload = localReports.filter(r => !cloudReportIds.has(r.id));
+      const reportsToUpload = localReports.filter(r => !cloudReportIds.has(r.id) && (!filterDate || new Date(r.timestamp) >= filterDate));
       
       for (const r of reportsToUpload) {
         const mapped = {
@@ -1021,7 +1537,7 @@ export const db = {
           equipment_name: r.equipmentName || r.equipment_name || '',
           temperature: r.temperature,
           notes: r.notes || null,
-          image: r.image || null,
+          image: null,
           status: r.status || 'Normal',
           jobdesk: r.jobdesk || 'suhu'
         };
@@ -1034,7 +1550,7 @@ export const db = {
 
       // 5. Upload missing local attendance to cloud
       const cloudAttIds = new Set(cloudAtt.map(a => a.id));
-      const attToUpload = localAtt.filter(a => !cloudAttIds.has(a.id));
+      const attToUpload = localAtt.filter(a => !cloudAttIds.has(a.id) && (!filterDate || new Date(a.timestamp) >= filterDate));
       
       for (const a of attToUpload) {
         const mapped = {
@@ -1043,7 +1559,7 @@ export const db = {
           officer: a.officer,
           jobdesk: a.jobdesk || 'suhu',
           type: a.type,
-          image: a.image,
+          image: null,
           latitude: a.latitude,
           longitude: a.longitude,
           gps_accuracy: a.gpsAccuracy,
@@ -1063,7 +1579,7 @@ export const db = {
       // 6. Fetch activities from cloud
       let cloudActivities = [];
       try {
-        const actRes = await fetch(`${url}/rest/v1/activities?select=*`, { headers });
+        const actRes = await fetch(`${url}/rest/v1/activities?select=*${dateFilter}`, { headers });
         cloudActivities = actRes.ok ? await actRes.json() : [];
       } catch (e) {
         // Table might not exist yet, that's ok
@@ -1080,13 +1596,14 @@ export const db = {
 
       // 8. Upload missing local activities to cloud
       const cloudActIds = new Set(cloudActivities.map(a => a.id));
-      const actToUpload = localActivities.filter(a => !cloudActIds.has(a.id));
+      const actToUpload = localActivities.filter(a => !cloudActIds.has(a.id) && (!filterDate || new Date(a.timestamp) >= filterDate));
       for (const a of actToUpload) {
         try {
+          const actMapped = { ...a, image: null };
           await fetch(`${url}/rest/v1/activities`, {
             method: 'POST',
             headers,
-            body: JSON.stringify(a)
+            body: JSON.stringify(actMapped)
           });
         } catch (e) {
           // Ignore if table doesn't exist
@@ -1460,8 +1977,45 @@ export const db = {
     }
   },
 
+  downloadExcel(headers, rows, sheetName = 'Data', fileNamePrefix = 'Export') {
+    try {
+      const data = [headers, ...rows];
+      const ws = XLSX.utils.aoa_to_sheet(data);
+
+      // Auto-fit column widths
+      const colWidths = headers.map((h, colIndex) => {
+        let maxLen = String(h || '').length;
+        rows.forEach(r => {
+          const val = r[colIndex];
+          if (val !== undefined && val !== null) {
+            const lines = String(val).split('\n');
+            lines.forEach(l => {
+              if (l.length > maxLen) maxLen = l.length;
+            });
+          }
+        });
+        return { wch: Math.min(Math.max(maxLen + 3, 10), 60) };
+      });
+      ws['!cols'] = colWidths;
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, sheetName.substring(0, 31));
+
+      const now = new Date();
+      const dateStr = now.toISOString().split('T')[0];
+      const fileName = `${fileNamePrefix}_${dateStr}.xlsx`;
+
+      XLSX.writeFile(wb, fileName);
+      return true;
+    } catch (e) {
+      console.error('Failed to export Excel:', e);
+      return false;
+    }
+  },
+
   downloadFile(content, fileNamePrefix) {
-    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), content], { type: 'text/csv;charset=utf-8;' });
+    const formattedContent = content.startsWith('sep=') ? content : `sep=,\r\n${content}`;
+    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), formattedContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     
@@ -1577,7 +2131,9 @@ export const db = {
         data: {
           locations: this.getLocations(),
           stationCoords: this.getStationCoords(),
-          settings: this.getSettings()
+          settings: this.getSettings(),
+          deviceLogs: this.getDeviceLogs(),
+          auditResetAt: this.getAuditResetAt()
         },
         updated_at: new Date().toISOString()
       };
@@ -1608,14 +2164,35 @@ export const db = {
           localStorage.setItem(LOCATIONS_KEY, JSON.stringify(cloudData.locations));
         }
         if (cloudData.stationCoords && typeof cloudData.stationCoords === 'object') {
-          const _existingCoords = JSON.parse(localStorage.getItem(STATION_COORDS_KEY) || '{}');
-          const _mergedCoords = { ...DEFAULT_STATION_COORDS, ..._existingCoords, ...cloudData.stationCoords };
+          const _mergedCoords = { ...DEFAULT_STATION_COORDS, ...cloudData.stationCoords };
           localStorage.setItem(STATION_COORDS_KEY, JSON.stringify(_mergedCoords));
         }
         if (cloudData.settings && typeof cloudData.settings === 'object') {
-          const _existingSettings = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
-          const _mergedSettings = { ...DEFAULT_SETTINGS, ..._existingSettings, ...cloudData.settings };
+          const _mergedSettings = { ...DEFAULT_SETTINGS, ...cloudData.settings };
           localStorage.setItem(SETTINGS_KEY, JSON.stringify(_mergedSettings));
+        }
+        if (cloudData.auditResetAt) {
+          const localReset = localStorage.getItem(AUDIT_RESET_KEY);
+          if (!localReset || new Date(cloudData.auditResetAt) > new Date(localReset)) {
+            localStorage.setItem(AUDIT_RESET_KEY, cloudData.auditResetAt);
+          }
+        }
+        const effectiveReset = localStorage.getItem(AUDIT_RESET_KEY);
+        const resetTime = effectiveReset ? new Date(effectiveReset).getTime() : 0;
+
+        if (cloudData.deviceLogs && Array.isArray(cloudData.deviceLogs)) {
+          const localLogs = JSON.parse(localStorage.getItem(DEVICE_LOGS_KEY) || '[]');
+          const mergedLogsMap = new Map();
+          cloudData.deviceLogs
+            .filter(l => !resetTime || new Date(l.timestamp).getTime() > resetTime)
+            .forEach(l => mergedLogsMap.set(l.id, l));
+          localLogs
+            .filter(l => !resetTime || new Date(l.timestamp).getTime() > resetTime)
+            .forEach(l => mergedLogsMap.set(l.id, l));
+          const mergedLogs = Array.from(mergedLogsMap.values())
+            .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+            .slice(0, 200);
+          localStorage.setItem(DEVICE_LOGS_KEY, JSON.stringify(mergedLogs));
         }
         return cloudData;
       }
