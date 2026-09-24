@@ -219,6 +219,14 @@ export default function App() {
   // History Date Range Filter
   const [historyStartDate, setHistoryStartDate] = useState('');
   const [historyEndDate, setHistoryEndDate] = useState('');
+  const [historyPeriodPreset, setHistoryPeriodPreset] = useState('all'); // 'all' | 'today' | '7days' | 'this_month' | 'custom'
+
+  // Download per Periode Waktu States
+  const [showPeriodDownloadModal, setShowPeriodDownloadModal] = useState(false);
+  const [downloadModalType, setDownloadModalType] = useState('suhu'); // 'suhu' | 'absensi' | 'kegiatan' | 'handover'
+  const [downloadModalPreset, setDownloadModalPreset] = useState('all'); // 'all' | 'today' | '7days' | 'this_month' | 'custom'
+  const [downloadModalStart, setDownloadModalStart] = useState('');
+  const [downloadModalEnd, setDownloadModalEnd] = useState('');
   const [newLocationName, setNewLocationName] = useState('');
   const [showOfficerInput, setShowOfficerInput] = useState(false);
   const [newOfficerName, setNewOfficerName] = useState('');
@@ -1539,11 +1547,131 @@ export default function App() {
     }
   };
 
+  const applyPeriodPreset = (preset, setStart, setEnd, setPresetState) => {
+    setPresetState(preset);
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    
+    if (preset === 'today') {
+      setStart(today);
+      setEnd(today);
+    } else if (preset === '7days') {
+      const d = new Date();
+      d.setDate(d.getDate() - 6);
+      setStart(d.toISOString().split('T')[0]);
+      setEnd(today);
+    } else if (preset === 'this_month') {
+      const y = now.getFullYear();
+      const m = String(now.getMonth() + 1).padStart(2, '0');
+      setStart(`${y}-${m}-01`);
+      setEnd(today);
+    } else if (preset === 'all') {
+      setStart('');
+      setEnd('');
+    }
+  };
+
+  const handleDownloadDataset = (type, startDate, endDate, format = 'csv') => {
+    if (type === 'audit') {
+      const auditList = db.getMultiAccountAudit();
+      const filteredAudit = auditList.filter(dev => {
+        if (!dev.lastActive) return true;
+        const itemDate = new Date(dev.lastActive);
+        const afterStart = startDate ? itemDate >= new Date(startDate) : true;
+        const beforeEnd = endDate ? itemDate <= new Date(endDate + 'T23:59:59') : true;
+        return afterStart && beforeEnd;
+      });
+
+      if (filteredAudit.length === 0) {
+        showToast("Tidak ada data audit pada periode waktu yang dipilih.", "error");
+        return;
+      }
+
+      let success = false;
+      if (format === 'csv') {
+        success = db.exportAuditToCSV(filteredAudit);
+      } else {
+        success = db.exportAuditToPDF(filteredAudit);
+      }
+
+      if (success) {
+        const label = startDate && endDate ? `${startDate} s/d ${endDate}` : (startDate ? `sejak ${startDate}` : 'semua waktu');
+        showToast(`Laporan Audit Perangkat periode ${label} berhasil diunduh (${filteredAudit.length} perangkat)!`, "success");
+      } else {
+        showToast("Gagal mengunduh laporan audit.", "error");
+      }
+      return;
+    }
+
+    let rawList = [];
+    if (type === 'suhu') rawList = reports;
+    else if (type === 'absensi') rawList = attendance;
+    else if (type === 'kegiatan') rawList = activities;
+    else if (type === 'handover') rawList = handovers;
+
+    if (currentUser && currentUser.role === 'Operator') {
+      if (type === 'suhu') rawList = rawList.filter(r => r.officer === currentUser.name);
+      else if (type === 'absensi') rawList = rawList.filter(a => a.officer === currentUser.name);
+      else if (type === 'kegiatan') rawList = rawList.filter(a => a.officer === currentUser.name);
+      else if (type === 'handover') rawList = rawList.filter(h => h.senderName === currentUser.name || h.receiverName === currentUser.name);
+    }
+
+    const filtered = rawList.filter(item => {
+      const ts = item.timestamp || item.sentAt || item.created_at;
+      if (!ts) return true;
+      const itemDate = new Date(ts);
+      const afterStart = startDate ? itemDate >= new Date(startDate) : true;
+      const beforeEnd = endDate ? itemDate <= new Date(endDate + 'T23:59:59') : true;
+      return afterStart && beforeEnd;
+    });
+
+    if (filtered.length === 0) {
+      showToast("Tidak ada data pada periode waktu yang dipilih.", "error");
+      return;
+    }
+
+    let success = false;
+    if (format === 'csv') {
+      if (type === 'suhu') success = db.exportToCSV(filtered);
+      else if (type === 'absensi') success = db.exportAttendanceToCSV(filtered);
+      else if (type === 'kegiatan') success = db.exportActivitiesToCSV(filtered);
+      else if (type === 'handover') success = db.exportHandoversToCSV(filtered);
+    } else {
+      if (type === 'suhu') success = db.exportToPDF(filtered);
+      else if (type === 'absensi') success = db.exportAttendanceToPDF(filtered);
+      else if (type === 'kegiatan') success = db.exportActivitiesToPDF(filtered);
+      else if (type === 'handover') success = db.exportHandoversToPDF(filtered);
+    }
+
+    if (success) {
+      const label = startDate && endDate ? `${startDate} s/d ${endDate}` : (startDate ? `sejak ${startDate}` : 'semua waktu');
+      showToast(`Laporan ${type} periode ${label} berhasil diunduh (${filtered.length} data)!`, "success");
+    } else {
+      showToast("Gagal mengunduh laporan.", "error");
+    }
+  };
+
+  const handleClearDeviceAudit = async () => {
+    if (window.confirm("PERINGATAN: Apakah Anda yakin ingin MENGHAPUS seluruh riwayat audit perangkat dan MERESET deteksi titip absen?\n\nTindakan ini akan mengosongkan log perangkat dan membersihkan status deteksi titip absen baik di browser lokal maupun Supabase Cloud.")) {
+      const success = db.clearDeviceAuditHistory();
+      if (success) {
+        showToast("Histori audit perangkat dan deteksi titip absen berhasil dibersihkan!", "success");
+        setSettings({ ...db.getSettings() });
+      } else {
+        showToast("Gagal membersihkan histori audit.", "error");
+      }
+    }
+  };
+
   const handleExportCSV = () => {
     if (historySubTab === 'suhu') {
       const success = db.exportToCSV(filteredReports);
       if (success) showToast("Laporan suhu diekspor ke file CSV!", "success");
       else showToast("Tidak ada data laporan suhu untuk diekspor.", "error");
+    } else if (historySubTab === 'kegiatan') {
+      const success = db.exportActivitiesToCSV(filteredActivities);
+      if (success) showToast("Laporan kegiatan diekspor ke file CSV!", "success");
+      else showToast("Tidak ada data kegiatan untuk diekspor.", "error");
     } else {
       const success = db.exportAttendanceToCSV(filteredAttendance);
       if (success) showToast("Laporan absensi diekspor ke file CSV!", "success");
@@ -2719,7 +2847,7 @@ export default function App() {
 
                 return (
                   <div className="glass-card" style={{ marginBottom: '20px', padding: '18px 20px', borderLeft: multiDevs.length > 0 ? '4px solid #ef4444' : '4px solid #10b981' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                         <div style={{ background: multiDevs.length > 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)', color: multiDevs.length > 0 ? '#ef4444' : '#10b981', padding: '8px', borderRadius: '8px' }}>
                           <Smartphone size={20} />
@@ -2737,6 +2865,27 @@ export default function App() {
                             Mendeteksi jika 1 HP / Laptop digunakan oleh lebih dari 1 akun Operator (Indikasi titip absen / titip pekerjaan)
                           </p>
                         </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <button 
+                          onClick={() => {
+                            setDownloadModalType('audit');
+                            setShowPeriodDownloadModal(true);
+                          }}
+                          className="btn btn-secondary"
+                          style={{ padding: '6px 12px', fontSize: '0.75rem', borderColor: 'rgba(59, 130, 246, 0.4)', color: 'var(--primary)', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                          title="Unduh laporan audit perangkat dan indikasi titip absen dalam format CSV atau PDF"
+                        >
+                          <Download size={14} /> Unduh Laporan Audit
+                        </button>
+                        <button 
+                          onClick={handleClearDeviceAudit}
+                          className="btn btn-secondary"
+                          style={{ padding: '6px 12px', fontSize: '0.75rem', borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.05)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                          title="Hapus riwayat audit perangkat dan bersihkan deteksi titip absen"
+                        >
+                          <Trash2 size={14} /> Hapus Histori Audit
+                        </button>
                       </div>
                     </div>
 
@@ -3282,20 +3431,61 @@ export default function App() {
               )}
             </div>
 
-            {/* Global Date Filter for History */}
-            <div className="glass-card" style={{ padding: '10px 14px', marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>
-                <Calendar size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'text-bottom' }} />
-                Filter Rentang Waktu
+            {/* Global Date Filter for History with Quick Presets & Download per Periode */}
+            <div className="glass-card" style={{ padding: '12px 14px', marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+                <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Calendar size={14} style={{ color: 'var(--primary)' }} />
+                  Filter Rentang Periode Waktu
+                </div>
+                <button 
+                  className="btn btn-secondary" 
+                  onClick={() => {
+                    setDownloadModalType(historySubTab === 'serah_terima' ? 'handover' : historySubTab);
+                    setShowPeriodDownloadModal(true);
+                  }}
+                  style={{ padding: '4px 10px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px', color: 'var(--primary)', borderColor: 'var(--primary)', background: 'rgba(59, 130, 246, 0.08)', display: 'flex', alignItems: 'center', gap: '5px' }}
+                >
+                  <Download size={12} /> Unduh per Periode
+                </button>
               </div>
+
+              {/* Quick Period Preset Buttons */}
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {[
+                  { id: 'all', label: 'Semua Waktu' },
+                  { id: 'today', label: 'Hari Ini' },
+                  { id: '7days', label: '7 Hari Terakhir' },
+                  { id: 'this_month', label: 'Bulan Ini' }
+                ].map(p => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => applyPeriodPreset(p.id, setHistoryStartDate, setHistoryEndDate, setHistoryPeriodPreset)}
+                    className="btn btn-secondary"
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '0.7rem',
+                      height: 'auto',
+                      borderRadius: '6px',
+                      background: historyPeriodPreset === p.id ? 'var(--primary)' : 'var(--bg-tertiary)',
+                      color: historyPeriodPreset === p.id ? '#fff' : 'var(--text-secondary)',
+                      borderColor: historyPeriodPreset === p.id ? 'var(--primary)' : 'var(--card-border)'
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                 <div>
                   <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Dari Tanggal</label>
-                  <input type="date" className="form-control" style={{ padding: '6px 8px', fontSize: '0.75rem' }} value={historyStartDate} onChange={(e) => setHistoryStartDate(e.target.value)} />
+                  <input type="date" className="form-control" style={{ padding: '6px 8px', fontSize: '0.75rem' }} value={historyStartDate} onChange={(e) => { setHistoryStartDate(e.target.value); setHistoryPeriodPreset('custom'); }} />
                 </div>
                 <div>
                   <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Sampai Tanggal</label>
-                  <input type="date" className="form-control" style={{ padding: '6px 8px', fontSize: '0.75rem' }} value={historyEndDate} onChange={(e) => setHistoryEndDate(e.target.value)} />
+                  <input type="date" className="form-control" style={{ padding: '6px 8px', fontSize: '0.75rem' }} value={historyEndDate} onChange={(e) => { setHistoryEndDate(e.target.value); setHistoryPeriodPreset('custom'); }} />
                 </div>
               </div>
             </div>
@@ -4240,6 +4430,150 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
               </div>
             </div>
 
+            {/* Download Data per Periode Waktu */}
+            <div className="glass-card" style={{ borderColor: 'rgba(59, 130, 246, 0.3)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 className="section-title" style={{ color: 'var(--primary)', marginBottom: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Download size={18} /> Download / Ekspor Laporan per Periode
+                </h3>
+              </div>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0 }}>
+                Pilih jenis data, rentang periode waktu, dan format unduhan (CSV atau PDF). Cocok untuk backup berkala sebelum menghapus data.
+              </p>
+
+              {/* Pilihan Jenis Data */}
+              <div>
+                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>JENIS DATA</label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '6px' }}>
+                  {[
+                    { id: 'suhu', label: '🌡️ Laporan Suhu' },
+                    { id: 'absensi', label: '👤 Data Absensi' },
+                    { id: 'kegiatan', label: '📋 Data Kegiatan' },
+                    { id: 'handover', label: '🔄 Data Handover' },
+                    { id: 'audit', label: '📱 Audit & Titip Absen' }
+                  ].map(t => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setDownloadModalType(t.id)}
+                      className="btn btn-secondary"
+                      style={{
+                        padding: '8px 10px',
+                        fontSize: '0.75rem',
+                        borderRadius: '8px',
+                        fontWeight: '600',
+                        background: downloadModalType === t.id ? 'var(--primary)' : 'var(--bg-tertiary)',
+                        color: downloadModalType === t.id ? '#fff' : 'var(--text-primary)',
+                        borderColor: downloadModalType === t.id ? 'var(--primary)' : 'var(--card-border)'
+                      }}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Preset Periode */}
+              <div>
+                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>PERIODE WAKTU CEPAT</label>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {[
+                    { id: 'today', label: 'Hari Ini' },
+                    { id: '7days', label: '7 Hari Terakhir' },
+                    { id: 'this_month', label: 'Bulan Ini' },
+                    { id: 'all', label: 'Semua Waktu' }
+                  ].map(p => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => applyPeriodPreset(p.id, setDownloadModalStart, setDownloadModalEnd, setDownloadModalPreset)}
+                      className="btn btn-secondary"
+                      style={{
+                        padding: '5px 12px',
+                        fontSize: '0.7rem',
+                        borderRadius: '6px',
+                        background: downloadModalPreset === p.id ? 'rgba(59, 130, 246, 0.2)' : 'var(--bg-tertiary)',
+                        color: downloadModalPreset === p.id ? 'var(--primary)' : 'var(--text-secondary)',
+                        borderColor: downloadModalPreset === p.id ? 'var(--primary)' : 'var(--card-border)'
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Input Tanggal Kustom */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <div>
+                  <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Dari Tanggal</label>
+                  <input 
+                    type="date" 
+                    className="form-control" 
+                    style={{ padding: '6px 8px', fontSize: '0.75rem' }} 
+                    value={downloadModalStart} 
+                    onChange={(e) => { setDownloadModalStart(e.target.value); setDownloadModalPreset('custom'); }} 
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Sampai Tanggal</label>
+                  <input 
+                    type="date" 
+                    className="form-control" 
+                    style={{ padding: '6px 8px', fontSize: '0.75rem' }} 
+                    value={downloadModalEnd} 
+                    onChange={(e) => { setDownloadModalEnd(e.target.value); setDownloadModalPreset('custom'); }} 
+                  />
+                </div>
+              </div>
+
+              {/* Preview Count */}
+              {(() => {
+                let targetList = [];
+                if (downloadModalType === 'suhu') targetList = reports;
+                else if (downloadModalType === 'absensi') targetList = attendance;
+                else if (downloadModalType === 'kegiatan') targetList = activities;
+                else if (downloadModalType === 'handover') targetList = handovers;
+                else if (downloadModalType === 'audit') targetList = db.getMultiAccountAudit();
+
+                const count = targetList.filter(item => {
+                  const ts = item.timestamp || item.sentAt || item.lastActive || item.created_at;
+                  if (!ts) return true;
+                  const itemDate = new Date(ts);
+                  const afterStart = downloadModalStart ? itemDate >= new Date(downloadModalStart) : true;
+                  const beforeEnd = downloadModalEnd ? itemDate <= new Date(downloadModalEnd + 'T23:59:59') : true;
+                  return afterStart && beforeEnd;
+                }).length;
+
+                return (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', padding: '8px 12px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span>📊 Data ditemukan: <strong>{count}</strong> {downloadModalType === 'audit' ? 'perangkat' : 'baris'}</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      {downloadModalStart && downloadModalEnd ? `${downloadModalStart} s/d ${downloadModalEnd}` : (downloadModalStart ? `Sejak ${downloadModalStart}` : 'Semua Periode')}
+                    </span>
+                  </div>
+                );
+              })()}
+
+              {/* Action Buttons */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <button 
+                  className="btn btn-primary" 
+                  onClick={() => handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'csv')}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.8rem', padding: '10px' }}
+                >
+                  <Download size={15} /> Unduh CSV (Excel)
+                </button>
+                <button 
+                  className="btn btn-secondary" 
+                  onClick={() => handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'pdf')}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.8rem', padding: '10px' }}
+                >
+                  <Download size={15} /> Unduh PDF
+                </button>
+              </div>
+            </div>
+
             {/* Danger Zones */}
             <div className="glass-card" style={{ borderColor: 'rgba(239, 68, 68, 0.25)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <h3 className="section-title" style={{ color: 'var(--danger)', marginBottom: 0 }}>
@@ -4259,6 +4593,9 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
               </button>
               <button className="btn btn-secondary" onClick={handleResetHandovers} style={{ width: '100%', borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.05)' }}>
                 <Trash2 size={16} /> Hapus Semua Data Handover (Serah Terima)
+              </button>
+              <button className="btn btn-secondary" onClick={handleClearDeviceAudit} style={{ width: '100%', borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.05)' }}>
+                <Trash2 size={16} /> Hapus Histori Audit Perangkat & Deteksi Titip Absen
               </button>
               <button className="btn btn-secondary" onClick={async () => {
                 if (window.confirm("PERINGATAN! Semua gambar/foto yang tersimpan di Cloud dan perangkat akan DIHAPUS PERMANEN untuk menghemat ruang penyimpanan. Data teks (nama, waktu, lokasi) tetap aman. Lanjutkan?")) {
@@ -4284,6 +4621,166 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
           </div>
         )}
       </main>
+
+      {/* ----------------- PERIOD DOWNLOAD MODAL ----------------- */}
+      {showPeriodDownloadModal && (
+        <div className="modal-overlay" onClick={() => setShowPeriodDownloadModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '460px' }}>
+            <div className="modal-header">
+              <div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Download size={20} style={{ color: 'var(--primary)' }} />
+                  Download Laporan per Periode
+                </h3>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Unduh data dalam format CSV atau PDF sesuai rentang waktu</span>
+              </div>
+              <button className="modal-close" onClick={() => setShowPeriodDownloadModal(false)}>
+                <X size={16} />
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '10px' }}>
+              {/* Pilihan Jenis Data */}
+              <div>
+                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '6px', display: 'block' }}>PILIH JENIS DATA</label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '6px' }}>
+                  {[
+                    { id: 'suhu', label: '🌡️ Laporan Suhu' },
+                    { id: 'absensi', label: '👤 Data Absensi' },
+                    { id: 'kegiatan', label: '📋 Data Kegiatan' },
+                    { id: 'handover', label: '🔄 Data Handover' },
+                    { id: 'audit', label: '📱 Audit & Titip Absen' }
+                  ].map(t => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setDownloadModalType(t.id)}
+                      className="btn btn-secondary"
+                      style={{
+                        padding: '8px 10px',
+                        fontSize: '0.75rem',
+                        borderRadius: '8px',
+                        fontWeight: '600',
+                        background: downloadModalType === t.id ? 'var(--primary)' : 'var(--bg-tertiary)',
+                        color: downloadModalType === t.id ? '#fff' : 'var(--text-primary)',
+                        borderColor: downloadModalType === t.id ? 'var(--primary)' : 'var(--card-border)'
+                      }}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Preset Periode */}
+              <div>
+                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '6px', display: 'block' }}>PERIODE WAKTU CEPAT</label>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {[
+                    { id: 'today', label: 'Hari Ini' },
+                    { id: '7days', label: '7 Hari Terakhir' },
+                    { id: 'this_month', label: 'Bulan Ini' },
+                    { id: 'all', label: 'Semua Waktu' }
+                  ].map(p => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => applyPeriodPreset(p.id, setDownloadModalStart, setDownloadModalEnd, setDownloadModalPreset)}
+                      className="btn btn-secondary"
+                      style={{
+                        padding: '5px 10px',
+                        fontSize: '0.7rem',
+                        borderRadius: '6px',
+                        background: downloadModalPreset === p.id ? 'rgba(59, 130, 246, 0.2)' : 'var(--bg-tertiary)',
+                        color: downloadModalPreset === p.id ? 'var(--primary)' : 'var(--text-secondary)',
+                        borderColor: downloadModalPreset === p.id ? 'var(--primary)' : 'var(--card-border)'
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Input Tanggal Kustom */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <div>
+                  <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Dari Tanggal</label>
+                  <input 
+                    type="date" 
+                    className="form-control" 
+                    style={{ padding: '6px 8px', fontSize: '0.75rem' }} 
+                    value={downloadModalStart} 
+                    onChange={(e) => { setDownloadModalStart(e.target.value); setDownloadModalPreset('custom'); }} 
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Sampai Tanggal</label>
+                  <input 
+                    type="date" 
+                    className="form-control" 
+                    style={{ padding: '6px 8px', fontSize: '0.75rem' }} 
+                    value={downloadModalEnd} 
+                    onChange={(e) => { setDownloadModalEnd(e.target.value); setDownloadModalPreset('custom'); }} 
+                  />
+                </div>
+              </div>
+
+              {/* Live Count Preview */}
+              {(() => {
+                let targetList = [];
+                if (downloadModalType === 'suhu') targetList = reports;
+                else if (downloadModalType === 'absensi') targetList = attendance;
+                else if (downloadModalType === 'kegiatan') targetList = activities;
+                else if (downloadModalType === 'handover') targetList = handovers;
+                else if (downloadModalType === 'audit') targetList = db.getMultiAccountAudit();
+
+                const count = targetList.filter(item => {
+                  const ts = item.timestamp || item.sentAt || item.lastActive || item.created_at;
+                  if (!ts) return true;
+                  const itemDate = new Date(ts);
+                  const afterStart = downloadModalStart ? itemDate >= new Date(downloadModalStart) : true;
+                  const beforeEnd = downloadModalEnd ? itemDate <= new Date(downloadModalEnd + 'T23:59:59') : true;
+                  return afterStart && beforeEnd;
+                }).length;
+
+                return (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', padding: '10px 12px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span>📊 Data ditemukan: <strong style={{ color: count > 0 ? 'var(--primary)' : 'var(--danger)' }}>{count}</strong> {downloadModalType === 'audit' ? 'perangkat' : 'baris'}</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      {downloadModalStart && downloadModalEnd ? `${downloadModalStart} s/d ${downloadModalEnd}` : (downloadModalStart ? `Sejak ${downloadModalStart}` : 'Semua Periode')}
+                    </span>
+                  </div>
+                );
+              })()}
+
+              {/* Tombol Unduh */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
+                <button 
+                  className="btn btn-primary" 
+                  onClick={() => {
+                    handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'csv');
+                    setShowPeriodDownloadModal(false);
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.8rem', padding: '10px' }}
+                >
+                  <Download size={15} /> Unduh CSV (Excel)
+                </button>
+                <button 
+                  className="btn btn-secondary" 
+                  onClick={() => {
+                    handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'pdf');
+                    setShowPeriodDownloadModal(false);
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.8rem', padding: '10px' }}
+                >
+                  <Download size={15} /> Unduh PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ----------------- SUHU DETAIL MODAL ----------------- */}
       {selectedReport && (
