@@ -25,7 +25,9 @@ import {
   Lock,
   ClipboardList,
   FlaskConical,
-  CheckSquare
+  CheckSquare,
+  Smartphone,
+  AlertCircle
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import { db } from './utils/db';
@@ -79,12 +81,15 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 // Get specific Geofence target based on jobdesk, shift, and selected station
 const getTargetGeofence = (jobdesk, shift, settings, stationName = '', stationCoords = {}) => {
   // Opsi B: Jika stasiun dipilih dan koordinatnya tersedia, gunakan koordinat stasiun
-  if (stationName && stationName !== 'Lainnya...' && stationCoords[stationName]) {
-    const sc = stationCoords[stationName];
+  const sc = (stationName && stationCoords && stationCoords[stationName]) 
+    ? stationCoords[stationName] 
+    : (stationName ? db.getStationCoord(stationName) : null);
+
+  if (stationName && stationName !== 'Lainnya...' && sc && sc.lat && sc.lon) {
     return {
-      lat: sc.lat,
-      lon: sc.lon,
-      radius: sc.radius || 100,
+      lat: parseFloat(sc.lat),
+      lon: parseFloat(sc.lon),
+      radius: parseInt(sc.radius || 100, 10),
       label: stationName
     };
   }
@@ -172,6 +177,7 @@ export default function App() {
   const [attShift, setAttShift] = useState('Day Shift');
   const [attStation, setAttStation] = useState('');
   const [stationCoords, setStationCoords] = useState(() => db.getStationCoords());
+  const [attResultModal, setAttResultModal] = useState(null); // { type: 'error' | 'success', title, message, station, distance, radiusLimit, officer, shift, time, status }
   const attMapRef = useRef(null); // Leaflet map instance
   const attMapContainerRef = useRef(null); // DOM div for map
   
@@ -214,6 +220,14 @@ export default function App() {
   // History Date Range Filter
   const [historyStartDate, setHistoryStartDate] = useState('');
   const [historyEndDate, setHistoryEndDate] = useState('');
+  const [historyPeriodPreset, setHistoryPeriodPreset] = useState('all'); // 'all' | 'today' | '7days' | 'this_month' | 'custom'
+
+  // Download per Periode Waktu States
+  const [showPeriodDownloadModal, setShowPeriodDownloadModal] = useState(false);
+  const [downloadModalType, setDownloadModalType] = useState('suhu'); // 'suhu' | 'absensi' | 'kegiatan' | 'handover'
+  const [downloadModalPreset, setDownloadModalPreset] = useState('all'); // 'all' | 'today' | '7days' | 'this_month' | 'custom'
+  const [downloadModalStart, setDownloadModalStart] = useState('');
+  const [downloadModalEnd, setDownloadModalEnd] = useState('');
   const [newLocationName, setNewLocationName] = useState('');
   const [showOfficerInput, setShowOfficerInput] = useState(false);
   const [newOfficerName, setNewOfficerName] = useState('');
@@ -262,6 +276,51 @@ export default function App() {
   // Approval tab states
   const [approvalFilter, setApprovalFilter] = useState('Semua'); // 'Semua' | 'Pending SPV' | 'Pending Manager'
 
+  // Custom Universal Confirmation Modal state
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: '',
+    message: '',
+    confirmText: 'Ya, Lanjutkan',
+    cancelText: 'Batal',
+    isDanger: true,
+    isLoading: false,
+    onConfirm: null
+  });
+
+  const openConfirmModal = ({ title, message, confirmText = 'Ya, Hapus Sekarang', cancelText = 'Batal', isDanger = true, onConfirm }) => {
+    setConfirmModal({
+      isOpen: true,
+      title,
+      message,
+      confirmText,
+      cancelText,
+      isDanger,
+      isLoading: false,
+      onConfirm
+    });
+  };
+
+  const closeConfirmModal = () => {
+    setConfirmModal(prev => ({ ...prev, isOpen: false, isLoading: false }));
+  };
+
+  const executeConfirmAction = async () => {
+    if (!confirmModal.onConfirm) {
+      closeConfirmModal();
+      return;
+    }
+    setConfirmModal(prev => ({ ...prev, isLoading: true }));
+    try {
+      await confirmModal.onConfirm();
+    } catch (err) {
+      console.error("Error executing confirm action:", err);
+      showToast("Terjadi kesalahan: " + (err.message || err), "error");
+    } finally {
+      closeConfirmModal();
+    }
+  };
+
   // Refs
   const videoRef = useRef(null);
   const attVideoRef = useRef(null);
@@ -284,6 +343,9 @@ export default function App() {
       setCurrentUser(session);
       // Adjust default landing tab based on role
       setActiveTab('dashboard');
+      if (session.role === 'KOPKAR') {
+        setHistorySubTab('absensi');
+      }
     }
 
     setReports(db.getReports());
@@ -323,6 +385,9 @@ export default function App() {
           if (res.activities) setActivities(res.activities);
           if (res.handovers) setHandovers(res.handovers);
           setUsers(db.getUsers());
+          setStationCoords(db.getStationCoords());
+          setLocations(db.getLocations());
+          setSettings(db.getSettings());
           showToast("Data tersinkronisasi otomatis dengan Cloud DB.", "success");
         }
       }).catch(err => {
@@ -333,26 +398,15 @@ export default function App() {
     }
   }, []);
 
-  // Auto-refresh dari cloud setiap 30 detik
+  // Sinkronisasi Cloud sekarang 100% MANUAL (saat tombol 'Refresh Data' ditekan)
+  // Auto-polling 30 detik dinonaktifkan permanen untuk menghemat kuota Supabase (Egress = 0 MB)
+
+  // Auto-lock GPS saat berpindah ke Tab Absensi
   useEffect(() => {
-    const config = db.getSupabaseConfig();
-    if (!config.url || !config.key) return;
-    const interval = setInterval(async () => {
-      try {
-        const res = await db.syncWithCloud();
-        if (res) {
-          setReports(res.reports);
-          setAttendance(res.attendance);
-          if (res.activities) setActivities(res.activities);
-          setUsers(db.getUsers());
-          setHandovers(db.getHandovers());
-        }
-      } catch (e) {
-        // silent fail for background sync
-      }
-    }, 30000); // setiap 30 detik
-    return () => clearInterval(interval);
-  }, []);
+    if (activeTab === 'attendance') {
+      lockGeolocation();
+    }
+  }, [activeTab]);
 
   // --- HANDOVER SHIFT & PIKET CHECKER & TIMER ---
   useEffect(() => {
@@ -483,6 +537,8 @@ export default function App() {
       setLoginUsername('admin');
     } else if (loginRole === 'Manager') {
       setLoginUsername('manager1');
+    } else if (loginRole === 'KOPKAR') {
+      setLoginUsername('KOPKAR');
     } else if (loginRole === 'Supervisor') {
       if (selectedJobdesk === 'analis') {
         setLoginUsername('supervisor1');
@@ -566,26 +622,67 @@ export default function App() {
       
       // Default Active Tabs based on role
       setActiveTab('dashboard');
+      if (session.role === 'KOPKAR') {
+        setHistorySubTab('absensi');
+      }
     } else {
       showToast("Username atau kata sandi salah!", "error");
     }
   };
 
-  const handleLogout = () => {
-    if (window.confirm("Apakah Anda yakin ingin keluar dari akun?")) {
-      db.logout();
-      setCurrentUser(null);
-      stopCamera();
-      stopAttCamera();
-      stopActCamera();
-      setCapturedImage(null);
-      setAttImage(null);
-      setAttGpsData(null);
-      setAttNotes('');
-      setActImage(null);
-      showToast("Anda telah keluar dari aplikasi.", "success");
-    }
+  const performLogout = (msg = "Anda telah keluar dari aplikasi.") => {
+    db.logout();
+    setCurrentUser(null);
+    stopCamera();
+    stopAttCamera();
+    stopActCamera();
+    setCapturedImage(null);
+    setAttImage(null);
+    setAttGpsData(null);
+    setAttNotes('');
+    setActImage(null);
+    showToast(msg, msg.includes("⚠️") ? "error" : "success");
   };
+
+  const handleLogout = () => {
+    openConfirmModal({
+      title: "Konfirmasi Keluar Akun",
+      message: "Apakah Anda yakin ingin keluar dari akun Anda?",
+      confirmText: "Keluar Akun",
+      cancelText: "Batal",
+      isDanger: false,
+      onConfirm: () => {
+        performLogout("Anda telah keluar dari aplikasi.");
+      }
+    });
+  };
+
+  // 10-Minute Auto-Logout Idle Timer (Tidak ada aktivitas 10 menit = Logout Otomatis)
+  useEffect(() => {
+    if (!currentUser) return;
+
+    let lastActivityTime = Date.now();
+
+    const resetIdleTimer = () => {
+      lastActivityTime = Date.now();
+    };
+
+    const activityEvents = ['mousemove', 'keydown', 'touchstart', 'scroll', 'click'];
+    activityEvents.forEach(ev => window.addEventListener(ev, resetIdleTimer, { passive: true }));
+
+    const idleInterval = setInterval(() => {
+      const now = Date.now();
+      const idleMins = (now - lastActivityTime) / 60000;
+      if (idleMins >= 10) {
+        performLogout("⚠️ Sesi Anda telah berakhir karena 10 menit tidak ada aktivitas. Silakan login kembali.");
+      }
+    }, 15000);
+
+    return () => {
+      activityEvents.forEach(ev => window.removeEventListener(ev, resetIdleTimer));
+      clearInterval(idleInterval);
+    };
+  }, [currentUser]);
 
   // --- CAMERA MANAGEMENT (Suhu) ---
   const startCamera = async () => {
@@ -923,7 +1020,7 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
-  // --- GEOLOCATION & FAKE GPS DETECTION ---
+  // --- GEOLOCATION & FAKE GPS DETECTION (HIGH ACCURACY HARDWARE GPS LOCK) ---
   const lockGeolocation = () => {
     if (!navigator.geolocation) {
       showToast("Geolocation tidak didukung oleh perangkat ini.", "error");
@@ -931,61 +1028,64 @@ export default function App() {
     }
 
     setAttGpsLoading(true);
-    setAttGpsData(null);
-    const startTime = performance.now();
 
+    const applyPosition = (position, isHighAcc = true) => {
+      const lat = position.coords.latitude;
+      const lon = position.coords.longitude;
+      const acc = position.coords.accuracy || 10;
+      
+      let isFake = false;
+      if (navigator.webdriver || acc === 0 || (Number.isInteger(lat) && Number.isInteger(lon))) {
+        isFake = true;
+      }
+
+      setAttGpsData({
+        latitude: lat,
+        longitude: lon,
+        accuracy: (Number(acc) || 10).toFixed(1),
+        isFakeGps: isFake
+      });
+      
+      setAttGpsLoading(false);
+      if (isFake) {
+        showToast("Peringatan: Terdeteksi kemungkinan manipulasi lokasi (Fake GPS)!", "error");
+      } else if (acc > 150) {
+        showToast(`⚠️ Sinyal GPS seluler (Akurasi: ±${acc.toFixed(0)}m). Tekan 'Lock Ulang' di area terbuka untuk GPS presisi.`, "error");
+      } else {
+        showToast(`Lokasi GPS presisi terkunci secara akurat (Akurasi: ±${acc.toFixed(1)}m).`, "success");
+      }
+    };
+
+    // Attempt 1: High Accuracy Hardware GPS Chip Lock (10s timeout, fresh fix)
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const endTime = performance.now();
-        const duration = endTime - startTime;
-        
-        const lat = position.coords.latitude;
-        const lon = position.coords.longitude;
-        const acc = position.coords.accuracy;
-        
-        let isFake = false;
-        
-        if (navigator.webdriver) {
-          isFake = true;
-        }
-        if (acc === 0) {
-          isFake = true;
-        }
-        if (Number.isInteger(lat) && Number.isInteger(lon)) {
-          isFake = true;
-        }
-
-        setAttGpsData({
-          latitude: lat,
-          longitude: lon,
-          accuracy: acc.toFixed(1),
-          isFakeGps: isFake
-        });
-        
-        setAttGpsLoading(false);
-        if (isFake) {
-          showToast("Peringatan: Terdeteksi indikasi manipulasi lokasi (Fake GPS)!", "error");
-        } else {
-          showToast("Lokasi GPS berhasil dikunci secara akurat.", "success");
-        }
+      (pos) => applyPosition(pos, true),
+      (err1) => {
+        console.warn("Hardware GPS lock timed out or failed, falling back to network triangulation...", err1);
+        // Attempt 2: Network / Cellular Fallback
+        navigator.geolocation.getCurrentPosition(
+          (pos) => applyPosition(pos, false),
+          (err2) => {
+            console.error("GPS Fallback Error:", err2);
+            let errorMsg = "Gagal mengunci lokasi. Harap pastikan GPS Mode Presisi di HP Anda aktif.";
+            if (err2.code === err2.PERMISSION_DENIED) {
+              errorMsg = "Akses lokasi ditolak. Harap izinkan akses lokasi presisi di HP & Chrome.";
+            } else if (err2.code === err2.TIMEOUT) {
+              errorMsg = "Pencarian GPS terlalu lama. Pastikan Anda berada di luar ruangan.";
+            }
+            showToast(errorMsg, "error");
+            setAttGpsLoading(false);
+            setAttGpsData({
+              latitude: null,
+              longitude: null,
+              accuracy: null,
+              isFakeGps: false,
+              error: err2.message
+            });
+          },
+          { enableHighAccuracy: false, timeout: 6000, maximumAge: 30000 }
+        );
       },
-      (error) => {
-        console.error("GPS Lock Error:", error);
-        let errorMsg = "Gagal mendapatkan lokasi GPS.";
-        if (error.code === error.PERMISSION_DENIED) {
-          errorMsg = "Akses lokasi ditolak. Harap aktifkan GPS dan izinkan browser mengakses lokasi.";
-        }
-        showToast(errorMsg, "error");
-        setAttGpsLoading(false);
-        setAttGpsData({
-          latitude: null,
-          longitude: null,
-          accuracy: null,
-          isFakeGps: false,
-          error: error.message
-        });
-      },
-      { enableHighAccuracy: true, timeout: 20000, maximumAge: 10000 }
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   };
 
@@ -1101,10 +1201,69 @@ export default function App() {
       return;
     }
 
+    const isApprovalRequired = settings.requireApproval || false;
+
     let attJobdesk = currentUser.jobdesk || 'suhu';
     if (currentUser.role !== 'Operator') {
       const u = users.find(user => user.username === attOfficer);
       if (u && u.jobdesk) attJobdesk = u.jobdesk;
+    }
+
+    if (['Check In', 'Check Out'].includes(attType) && !attStation) {
+      showToast("Harap pilih stasiun/lokasi kerja Anda terlebih dahulu!", "error");
+      setAttResultModal({
+        type: 'error',
+        title: '⚠️ STASIUN KERJA BELUM DIPILIH',
+        station: 'Belum Dipilih',
+        distance: '0',
+        radiusLimit: 0,
+        message: 'Gagal melakukan absensi. Harap pilih Stasiun / Lokasi Kerja Anda pada menu dropdown terlebih dahulu.'
+      });
+      return;
+    }
+
+    // Geofence Distance Validation (Wajib Selalu Aktif untuk Check In dan Check Out)
+    if (['Check In', 'Check Out'].includes(attType)) {
+      if (!attGpsData || !attGpsData.latitude) {
+        showToast("Harap kunci lokasi GPS terlebih dahulu!", "error");
+        setAttResultModal({
+          type: 'error',
+          title: '⚠️ LOKASI GPS BELUM TERKUNCI',
+          station: attStation || 'Stasiun Kerja',
+          distance: '0',
+          radiusLimit: 0,
+          message: 'Gagal melakukan absensi. Harap tekan tombol "Lock Ulang" lokasi GPS Anda terlebih dahulu.'
+        });
+        return;
+      }
+
+      // Filter: Tolak absensi jika sinyal GPS kurang presisi (> 30m)
+      if (parseFloat(attGpsData.accuracy) > 30) {
+        setAttResultModal({
+          type: 'error',
+          title: '⚠️ AKURASI GPS KURANG PRESISI',
+          station: attStation || 'Stasiun Kerja',
+          distance: '0',
+          radiusLimit: 30,
+          message: `Absensi Ditolak!\nSinyal lokasi HP Anda saat ini kurang presisi (Akurasi ±${attGpsData.accuracy}m, Syarat Maksimal ±30m).\n\nSilakan pastikan GPS HP dalam mode "Presisi Tinggi", berada di luar ruangan/area terbuka, lalu tekan tombol "Lock Ulang".`
+        });
+        showToast(`⚠️ Absensi Ditolak: Sinyal GPS kurang presisi (±${attGpsData.accuracy}m > 30m). Tekan Lock Ulang.`, "error");
+        return;
+      }
+      const target = getTargetGeofence(attJobdesk, attShift, settings, attStation, stationCoords);
+      const dist = calculateDistance(attGpsData.latitude, attGpsData.longitude, target.lat, target.lon);
+      if (dist !== null && dist > target.radius) {
+        setAttResultModal({
+          type: 'error',
+          title: '⚠️ ABSENSI DITOLAK (DILUAR AREA)',
+          station: target.label || attStation || 'Stasiun Kerja',
+          distance: dist.toFixed(0),
+          radiusLimit: target.radius,
+          message: `Absensi ${attType} Ditolak!\nPosisi Anda saat ini berjarak ${dist.toFixed(0)} meter dari stasiun ${target.label}, melebihi batas maksimal radius (${target.radius} meter).\n\nSilakan mendekat ke lokasi stasiun kerja Anda.`
+        });
+        showToast(`⚠️ Absensi Gagal: Jarak Anda (${dist.toFixed(0)}m) di luar radius stasiun ${target.label} (Batas Radius: ${target.radius}m).`, "error");
+        return;
+      }
     }
 
     let computedNotes = attNotes || '';
@@ -1198,13 +1357,21 @@ export default function App() {
 
     const saved = db.saveAttendance(newAttendance);
     if (saved) {
+      setAttResultModal({
+        type: 'success',
+        title: `✅ ABSENSI ${attType.toUpperCase()} SUKSES`,
+        officer: officerName,
+        station: attStation || 'Stasiun Kerja Utama',
+        shift: attShift,
+        time: now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        status: isApprovalRequired ? 'Pending SPV' : 'Disetujui',
+        message: `Absensi ${attType} atas nama ${officerName} berhasil dicatat pada jam ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}.`
+      });
       showToast(`Absensi ${attType} berhasil disimpan!`, "success");
       setAttendance(db.getAttendance());
       setAttImage(null);
       setAttGpsData(null);
       setAttNotes('');
-      setHistorySubTab('absensi');
-      setActiveTab('history');
       if (attType === 'Check Out' && ['Piket', 'Lembur'].includes(attShift)) {
         setShowPiketForm(true);
         setPiketPendingWarning(true);
@@ -1245,20 +1412,49 @@ export default function App() {
   };
 
   const handleDeleteActivity = (id) => {
-    if (window.confirm("Apakah Anda yakin ingin menghapus kegiatan ini?")) {
-      db.deleteActivity(id);
-      setActivities(db.getActivities());
-      showToast("Kegiatan berhasil dihapus.", "success");
-      setSelectedActivity(null);
-    }
+    openConfirmModal({
+      title: "Hapus Data Kegiatan",
+      message: "Apakah Anda yakin ingin menghapus data kegiatan ini?",
+      confirmText: "Ya, Hapus",
+      cancelText: "Batal",
+      isDanger: true,
+      onConfirm: async () => {
+        db.deleteActivity(id);
+        setActivities(db.getActivities());
+        showToast("Kegiatan berhasil dihapus.", "success");
+        setSelectedActivity(null);
+      }
+    });
   };
 
   const handleResetActivities = () => {
-    if (window.confirm("PERINGATAN: Semua data kegiatan akan DIHAPUS PERMANEN. Lanjutkan?")) {
-      db.clearAllActivities();
-      setActivities([]);
-      showToast("Seluruh data kegiatan telah dikosongkan.", "success");
-    }
+    openConfirmModal({
+      title: "Hapus Semua Data Kegiatan",
+      message: "PERINGATAN! Seluruh data kegiatan operasional akan DIHAPUS PERMANEN dari Supabase Cloud dan memori lokal perangkat. Tindakan ini tidak dapat dibatalkan.",
+      confirmText: "Ya, Hapus Semua Kegiatan",
+      cancelText: "Batal",
+      isDanger: true,
+      onConfirm: async () => {
+        await db.clearAllActivities();
+        setActivities([]);
+        showToast("Seluruh data kegiatan telah dikosongkan.", "success");
+      }
+    });
+  };
+
+  const handleResetHandovers = () => {
+    openConfirmModal({
+      title: "Hapus Semua Data Handover",
+      message: "PERINGATAN! Seluruh data Serah Terima Pekerjaan (Handover) akan DIHAPUS PERMANEN dari Supabase Cloud dan memori lokal perangkat. Tindakan ini tidak dapat dibatalkan.",
+      confirmText: "Ya, Hapus Semua Handover",
+      cancelText: "Batal",
+      isDanger: true,
+      onConfirm: async () => {
+        await db.clearAllHandovers();
+        setHandovers([]);
+        showToast("Seluruh data Serah Terima Pekerjaan telah dikosongkan.", "success");
+      }
+    });
   };
 
   // --- HANDOVER SUBMISSION HANDLERS ---
@@ -1416,21 +1612,169 @@ export default function App() {
   };
 
   const handleDeleteReport = (id) => {
-    if (window.confirm("Apakah Anda yakin ingin menghapus laporan suhu ini?")) {
-      db.deleteReport(id);
-      setReports(db.getReports());
-      showToast("Laporan berhasil dihapus.", "success");
-      setSelectedReport(null);
-    }
+    openConfirmModal({
+      title: "Hapus Laporan Suhu",
+      message: "Apakah Anda yakin ingin menghapus data laporan suhu ini?",
+      confirmText: "Ya, Hapus",
+      cancelText: "Batal",
+      isDanger: true,
+      onConfirm: async () => {
+        db.deleteReport(id);
+        setReports(db.getReports());
+        showToast("Laporan berhasil dihapus.", "success");
+        setSelectedReport(null);
+      }
+    });
   };
 
   const handleDeleteAttendance = (id) => {
-    if (window.confirm("Apakah Anda yakin ingin menghapus absensi ini?")) {
-      db.deleteAttendance(id);
-      setAttendance(db.getAttendance());
-      showToast("Data absensi berhasil dihapus.", "success");
-      setSelectedAttendance(null);
+    openConfirmModal({
+      title: "Hapus Data Absensi",
+      message: "Apakah Anda yakin ingin menghapus catatan data absensi ini?",
+      confirmText: "Ya, Hapus",
+      cancelText: "Batal",
+      isDanger: true,
+      onConfirm: async () => {
+        db.deleteAttendance(id);
+        setAttendance(db.getAttendance());
+        showToast("Data absensi berhasil dihapus.", "success");
+        setSelectedAttendance(null);
+      }
+    });
+  };
+
+  const applyPeriodPreset = (preset, setStart, setEnd, setPresetState) => {
+    setPresetState(preset);
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    
+    if (preset === 'today') {
+      setStart(today);
+      setEnd(today);
+    } else if (preset === '7days') {
+      const d = new Date();
+      d.setDate(d.getDate() - 6);
+      setStart(d.toISOString().split('T')[0]);
+      setEnd(today);
+    } else if (preset === 'this_month') {
+      const y = now.getFullYear();
+      const m = String(now.getMonth() + 1).padStart(2, '0');
+      setStart(`${y}-${m}-01`);
+      setEnd(today);
+    } else if (preset === 'all') {
+      setStart('');
+      setEnd('');
     }
+  };
+
+  const handleDownloadDataset = (type, startDate, endDate, format = 'excel') => {
+    if (type === 'audit') {
+      const auditList = db.getMultiAccountAudit();
+      const filteredAudit = auditList.filter(dev => {
+        if (!dev.lastActive) return true;
+        const itemDate = new Date(dev.lastActive);
+        const afterStart = startDate ? itemDate >= new Date(startDate) : true;
+        const beforeEnd = endDate ? itemDate <= new Date(endDate + 'T23:59:59') : true;
+        return afterStart && beforeEnd;
+      });
+
+      if (filteredAudit.length === 0) {
+        showToast("Tidak ada data audit pada periode waktu yang dipilih.", "error");
+        return;
+      }
+
+      let success = false;
+      if (format === 'excel' || format === 'xlsx') {
+        success = db.exportAuditToExcel(filteredAudit);
+      } else if (format === 'csv') {
+        success = db.exportAuditToCSV(filteredAudit);
+      } else {
+        success = db.exportAuditToPDF(filteredAudit);
+      }
+
+      if (success) {
+        const label = startDate && endDate ? `${startDate} s/d ${endDate}` : (startDate ? `sejak ${startDate}` : 'semua waktu');
+        showToast(`Laporan Audit Perangkat periode ${label} berhasil diunduh (${filteredAudit.length} perangkat)!`, "success");
+      } else {
+        showToast("Gagal mengunduh laporan audit.", "error");
+      }
+      return;
+    }
+
+    let rawList = [];
+    if (type === 'suhu') rawList = reports;
+    else if (type === 'absensi') rawList = attendance;
+    else if (type === 'kegiatan') rawList = activities;
+    else if (type === 'handover') rawList = handovers;
+    else if (type === 'audit') rawList = db.getMultiAccountAudit();
+
+    if (currentUser && currentUser.role === 'Operator') {
+      if (type === 'suhu') rawList = rawList.filter(r => r.officer === currentUser.name);
+      else if (type === 'absensi') rawList = rawList.filter(a => a.officer === currentUser.name);
+      else if (type === 'kegiatan') rawList = rawList.filter(a => a.officer === currentUser.name);
+      else if (type === 'handover') rawList = rawList.filter(h => h.senderName === currentUser.name || h.receiverName === currentUser.name);
+    }
+
+    const filtered = rawList.filter(item => {
+      const ts = item.timestamp || item.sentAt || item.lastActive || item.created_at;
+      if (!ts) return true;
+      const itemDate = new Date(ts);
+      const afterStart = startDate ? itemDate >= new Date(startDate) : true;
+      const beforeEnd = endDate ? itemDate <= new Date(endDate + 'T23:59:59') : true;
+      return afterStart && beforeEnd;
+    });
+
+    if (filtered.length === 0) {
+      showToast("Tidak ada data pada periode waktu yang dipilih.", "error");
+      return;
+    }
+
+    let success = false;
+    if (format === 'excel' || format === 'xlsx') {
+      if (type === 'suhu') success = db.exportToExcel(filtered);
+      else if (type === 'absensi') success = db.exportAttendanceToExcel(filtered);
+      else if (type === 'kegiatan') success = db.exportActivitiesToExcel(filtered);
+      else if (type === 'handover') success = db.exportHandoversToExcel(filtered);
+      else if (type === 'audit') success = db.exportAuditToExcel(filtered);
+    } else if (format === 'csv') {
+      if (type === 'suhu') success = db.exportToCSV(filtered);
+      else if (type === 'absensi') success = db.exportAttendanceToCSV(filtered);
+      else if (type === 'kegiatan') success = db.exportActivitiesToCSV(filtered);
+      else if (type === 'handover') success = db.exportHandoversToCSV(filtered);
+      else if (type === 'audit') success = db.exportAuditToCSV(filtered);
+    } else {
+      if (type === 'suhu') success = db.exportToPDF(filtered);
+      else if (type === 'absensi') success = db.exportAttendanceToPDF(filtered);
+      else if (type === 'kegiatan') success = db.exportActivitiesToPDF(filtered);
+      else if (type === 'handover') success = db.exportHandoversToPDF(filtered);
+      else if (type === 'audit') success = db.exportAuditToPDF(filtered);
+    }
+
+    if (success) {
+      const label = startDate && endDate ? `${startDate} s/d ${endDate}` : (startDate ? `sejak ${startDate}` : 'semua waktu');
+      showToast(`Laporan ${type} periode ${label} berhasil diunduh (${filtered.length} data)!`, "success");
+    } else {
+      showToast("Gagal mengunduh laporan.", "error");
+    }
+  };
+
+  const handleClearDeviceAudit = () => {
+    openConfirmModal({
+      title: "Hapus Histori Audit & Reset Titip Absen",
+      message: "PERINGATAN: Apakah Anda yakin ingin MENGHAPUS seluruh riwayat audit perangkat dan MERESET deteksi titip absen? Tindakan ini akan mengosongkan log perangkat dan membersihkan status deteksi titip absen baik di browser lokal maupun Supabase Cloud.",
+      confirmText: "Ya, Bersihkan Histori Audit",
+      cancelText: "Batal",
+      isDanger: true,
+      onConfirm: async () => {
+        const success = db.clearDeviceAuditHistory();
+        if (success) {
+          showToast("Histori audit perangkat dan deteksi titip absen berhasil dibersihkan!", "success");
+          setSettings({ ...db.getSettings() });
+        } else {
+          showToast("Gagal membersihkan histori audit.", "error");
+        }
+      }
+    });
   };
 
   const handleExportCSV = () => {
@@ -1438,9 +1782,37 @@ export default function App() {
       const success = db.exportToCSV(filteredReports);
       if (success) showToast("Laporan suhu diekspor ke file CSV!", "success");
       else showToast("Tidak ada data laporan suhu untuk diekspor.", "error");
+    } else if (historySubTab === 'kegiatan') {
+      const success = db.exportActivitiesToCSV(filteredActivities);
+      if (success) showToast("Laporan kegiatan diekspor ke file CSV!", "success");
+      else showToast("Tidak ada data kegiatan untuk diekspor.", "error");
+    } else if (historySubTab === 'audit') {
+      const success = db.exportAuditToCSV(db.getMultiAccountAudit());
+      if (success) showToast("Laporan audit diekspor ke file CSV!", "success");
+      else showToast("Tidak ada data audit untuk diekspor.", "error");
     } else {
       const success = db.exportAttendanceToCSV(filteredAttendance);
       if (success) showToast("Laporan absensi diekspor ke file CSV!", "success");
+      else showToast("Tidak ada data absensi untuk diekspor.", "error");
+    }
+  };
+
+  const handleExportExcel = () => {
+    if (historySubTab === 'suhu') {
+      const success = db.exportToExcel(filteredReports);
+      if (success) showToast("Laporan suhu diekspor ke file Excel (.xlsx) rapi!", "success");
+      else showToast("Tidak ada data laporan suhu untuk diekspor.", "error");
+    } else if (historySubTab === 'kegiatan') {
+      const success = db.exportActivitiesToExcel(filteredActivities);
+      if (success) showToast("Laporan kegiatan diekspor ke file Excel (.xlsx) rapi!", "success");
+      else showToast("Tidak ada data kegiatan untuk diekspor.", "error");
+    } else if (historySubTab === 'audit') {
+      const success = db.exportAuditToExcel(db.getMultiAccountAudit());
+      if (success) showToast("Laporan audit diekspor ke file Excel (.xlsx) rapi!", "success");
+      else showToast("Tidak ada data audit untuk diekspor.", "error");
+    } else {
+      const success = db.exportAttendanceToExcel(filteredAttendance);
+      if (success) showToast("Laporan absensi diekspor ke file Excel (.xlsx) rapi!", "success");
       else showToast("Tidak ada data absensi untuk diekspor.", "error");
     }
   };
@@ -1460,7 +1832,12 @@ export default function App() {
         if (res) {
           setReports(res.reports);
           setAttendance(res.attendance);
-          setUsers(db.getUsers()); // Update users state
+          if (res.activities) setActivities(res.activities);
+          if (res.handovers) setHandovers(res.handovers);
+          setUsers(db.getUsers());
+          setStationCoords(db.getStationCoords());
+          setLocations(db.getLocations());
+          setSettings(db.getSettings());
           showToast("Sinkronisasi data awal berhasil!", "success");
         }
       } catch (err) {
@@ -1483,7 +1860,12 @@ export default function App() {
       if (res) {
         setReports(res.reports);
         setAttendance(res.attendance);
-        setUsers(db.getUsers()); // Update users state
+        if (res.activities) setActivities(res.activities);
+        if (res.handovers) setHandovers(res.handovers);
+        setUsers(db.getUsers());
+        setStationCoords(db.getStationCoords());
+        setLocations(db.getLocations());
+        setSettings(db.getSettings());
         showToast("Sinkronisasi cloud berhasil diselesaikan!", "success");
       } else {
         showToast("Koneksi cloud belum dikonfigurasi.", "error");
@@ -1550,6 +1932,37 @@ export default function App() {
     e.preventDefault();
     db.saveAllStationCoords(stationCoords);
     showToast("Koordinat stasiun kerja berhasil disimpan!", "success");
+  };
+
+  const handleSetCurrentLocationToStation = (stationName) => {
+    if (!navigator.geolocation) {
+      showToast("Geolocation tidak didukung oleh perangkat ini.", "error");
+      return;
+    }
+    showToast(`Mengambil lokasi GPS untuk stasiun ${stationName}...`, "info");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        setStationCoords(prev => {
+          const updated = {
+            ...prev,
+            [stationName]: {
+              ...(prev[stationName] || { radius: 100 }),
+              lat,
+              lon
+            }
+          };
+          db.saveAllStationCoords(updated);
+          return updated;
+        });
+        showToast(`Koordinat stasiun ${stationName} berhasil diisi ke posisi Anda!`, "success");
+      },
+      (err) => {
+        showToast("Gagal mengambil GPS HP. Pastikan GPS aktif.", "error");
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   };
 
   const handleAddUser = (e) => {
@@ -1634,19 +2047,33 @@ export default function App() {
   };
 
   const handleResetData = () => {
-    if (window.confirm("PERINGATAN! Tindakan ini akan menghapus seluruh data laporan suhu secara permanen. Apakah Anda ingin melanjutkan?")) {
-      db.clearAllReports();
-      setReports([]);
-      showToast("Seluruh laporan suhu telah dikosongkan.", "success");
-    }
+    openConfirmModal({
+      title: "Hapus Semua Laporan Suhu",
+      message: "PERINGATAN! Seluruh data laporan pengukuran suhu akan DIHAPUS PERMANEN dari Supabase Cloud dan perangkat lokal. Tindakan ini tidak dapat dibatalkan.",
+      confirmText: "Ya, Hapus Semua Laporan",
+      cancelText: "Batal",
+      isDanger: true,
+      onConfirm: async () => {
+        await db.clearAllReports();
+        setReports([]);
+        showToast("Seluruh laporan suhu telah dikosongkan.", "success");
+      }
+    });
   };
 
   const handleResetAttendance = () => {
-    if (window.confirm("PERINGATAN! Tindakan ini akan menghapus seluruh data absensi secara permanen. Apakah Anda ingin melanjutkan?")) {
-      db.clearAllAttendance();
-      setAttendance([]);
-      showToast("Seluruh data absensi telah dikosongkan.", "success");
-    }
+    openConfirmModal({
+      title: "Hapus Semua Data Absensi",
+      message: "PERINGATAN! Seluruh data riwayat absensi petugas akan DIHAPUS PERMANEN dari Supabase Cloud dan perangkat lokal. Tindakan ini tidak dapat dibatalkan.",
+      confirmText: "Ya, Hapus Semua Absensi",
+      cancelText: "Batal",
+      isDanger: true,
+      onConfirm: async () => {
+        await db.clearAllAttendance();
+        setAttendance([]);
+        showToast("Seluruh data absensi telah dikosongkan.", "success");
+      }
+    });
   };
 
   // --- FILTERS & ANALYTICS ---
@@ -1662,9 +2089,9 @@ export default function App() {
     
     const term = searchQuery.toLowerCase();
     const matchSearch = 
-      r.location.toLowerCase().includes(term) ||
+      (r.location && r.location.toLowerCase().includes(term)) ||
       (r.officer && r.officer.toLowerCase().includes(term)) ||
-      r.temperature.toString().includes(term) ||
+      (r.temperature !== undefined && r.temperature !== null && r.temperature.toString().includes(term)) ||
       (r.notes && r.notes.toLowerCase().includes(term));
       
     // Date filter
@@ -1691,8 +2118,8 @@ export default function App() {
 
     const term = searchAttQuery.toLowerCase();
     const matchSearch = 
-      a.officer.toLowerCase().includes(term) ||
-      a.type.toLowerCase().includes(term) ||
+      (a.officer && a.officer.toLowerCase().includes(term)) ||
+      (a.type && a.type.toLowerCase().includes(term)) ||
       (a.isFakeGps ? 'fake' : '').includes(term);
 
     // Date filter
@@ -1744,7 +2171,10 @@ export default function App() {
     let abnormalCount = 0;
     
     if (total > 0) {
-      maxT = `${Math.max(...todayReports.map(r => r.temperature)).toFixed(1)}°C`;
+      const validTemps = todayReports.map(r => Number(r.temperature)).filter(t => !isNaN(t));
+      if (validTemps.length > 0) {
+        maxT = `${Math.max(...validTemps).toFixed(1)}°C`;
+      }
       abnormalCount = todayReports.filter(r => {
         const statusObj = db.getTemperatureStatus(r.temperature, settings);
         return statusObj.label !== 'NORMAL';
@@ -1786,6 +2216,7 @@ export default function App() {
     });
 
     const chartData = [...visibleReports]
+      .filter(r => r.temperature !== null && r.temperature !== undefined && !isNaN(Number(r.temperature)))
       .slice(0, 7)
       .reverse();
       
@@ -1805,21 +2236,22 @@ export default function App() {
     const paddingX = 40;
     const paddingY = 25;
     
-    const temps = chartData.map(r => r.temperature);
+    const temps = chartData.map(r => Number(r.temperature) || 0);
     const minTemp = Math.floor(Math.min(...temps)) - 5;
-    const maxTemp = Math.ceil(Math.max(...temps, settings.highTempAlert)) + 5;
-    const tempRange = maxTemp - minTemp;
+    const maxTemp = Math.ceil(Math.max(...temps, settings.highTempAlert || 60)) + 5;
+    const tempRange = (maxTemp - minTemp) || 1;
 
     const points = chartData.map((d, index) => {
-      const x = paddingX + (index * (width - paddingX * 2) / (chartData.length - 1));
-      const y = height - paddingY - ((d.temperature - minTemp) * (height - paddingY * 2) / tempRange);
-      return { x, y, temp: d.temperature, time: new Date(d.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) };
+      const numTemp = Number(d.temperature) || 0;
+      const x = paddingX + (index * (width - paddingX * 2) / (chartData.length - 1 || 1));
+      const y = height - paddingY - ((numTemp - minTemp) * (height - paddingY * 2) / tempRange);
+      return { x, y, temp: numTemp, time: new Date(d.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) };
     });
 
     const pathData = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
     const areaData = `${pathData} L ${points[points.length - 1].x} ${height - paddingY} L ${points[0].x} ${height - paddingY} Z`;
 
-    const warningY = height - paddingY - ((settings.highTempAlert - minTemp) * (height - paddingY * 2) / tempRange);
+    const warningY = height - paddingY - (((settings.highTempAlert || 60) - minTemp) * (height - paddingY * 2) / tempRange);
 
     return (
       <div style={{ position: 'relative' }}>
@@ -1859,7 +2291,7 @@ export default function App() {
               <g key={i}>
                 <circle cx={p.x} cy={p.y} r="5" className="chart-dot" />
                 <text x={p.x} y={p.y - 10} textAnchor="middle" fill="var(--text-primary)" fontSize="9" fontWeight="bold" fontFamily="var(--font-heading)">
-                  {p.temp.toFixed(1)}°
+                  {(Number(p.temp) || 0).toFixed(1)}°
                 </text>
                 <text x={p.x} y={height - 8} textAnchor="middle" className="chart-axis-text">
                   {p.time}
@@ -1868,7 +2300,7 @@ export default function App() {
             ))}
             
             <text x={paddingX - 10} y={paddingY + 3} textAnchor="end" className="chart-axis-text">{maxTemp}°</text>
-            <text x={paddingX - 10} y={(height - paddingY + paddingY)/2 + 3} textAnchor="end" className="chart-axis-text">{((maxTemp+minTemp)/2).toFixed(0)}°</text>
+            <text x={paddingX - 10} y={(height - paddingY + paddingY)/2 + 3} textAnchor="end" className="chart-axis-text">{(((maxTemp+minTemp)/2) || 0).toFixed(0)}°</text>
             <text x={paddingX - 10} y={height - paddingY + 3} textAnchor="end" className="chart-axis-text">{minTemp}°</text>
           </svg>
         </div>
@@ -1888,8 +2320,8 @@ export default function App() {
     if (tabName === 'activity') return role === 'Operator' || role === 'Supervisor';
     if (tabName === 'attendance') return role === 'Operator';
     if (tabName === 'settings') return role === 'Administrator';
-    // Approval: hanya Supervisor & Manager
-    if (tabName === 'approval') return role === 'Supervisor' || role === 'Manager';
+    // Approval & Audit: Supervisor, Manager, dan Administrator
+    if (tabName === 'approval') return role === 'Supervisor' || role === 'Manager' || role === 'Administrator';
     return false;
 
   };
@@ -1929,38 +2361,41 @@ export default function App() {
                 <option value="Supervisor">Supervisor</option>
                 <option value="Manager">Manager</option>
                 <option value="Administrator">Administrator</option>
+                <option value="KOPKAR">KOPKAR</option>
               </select>
             </div>
 
-            {/* Jobdesk Choice */}
-            <div className="form-group">
-              <label>Pilih Jobdesk</label>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginTop: '6px' }}>
-                {[
-                  { value: 'suhu', label: 'Suhu', icon: '🌡️', desc: 'Pemantauan suhu' },
-                  { value: 'inspeksi', label: 'Inspeksi', icon: '🔍', desc: 'Kegiatan inspeksi' },
-                  { value: 'analis', label: 'Analis', icon: '🧪', desc: 'Kegiatan analis' }
-                ].map(jd => (
-                  <div 
-                    key={jd.value}
-                    onClick={() => setSelectedJobdesk(jd.value)}
-                    style={{
-                      padding: '10px 6px',
-                      borderRadius: '10px',
-                      border: selectedJobdesk === jd.value ? '2px solid var(--primary)' : '2px solid var(--card-border)',
-                      background: selectedJobdesk === jd.value ? 'rgba(99,102,241,0.1)' : 'transparent',
-                      cursor: 'pointer',
-                      textAlign: 'center',
-                      transition: 'all 0.2s ease'
-                    }}
-                  >
-                    <div style={{ fontSize: '1.3rem', marginBottom: '4px' }}>{jd.icon}</div>
-                    <div style={{ fontSize: '0.7rem', fontWeight: '700', color: selectedJobdesk === jd.value ? 'var(--primary)' : 'var(--text-primary)' }}>{jd.label}</div>
-                    <div style={{ fontSize: '0.55rem', color: 'var(--text-muted)', marginTop: '2px' }}>{jd.desc}</div>
-                  </div>
-                ))}
+            {/* Jobdesk Choice - Hanya untuk Operator, Supervisor, Admin */}
+            {loginRole !== 'KOPKAR' && (
+              <div className="form-group">
+                <label>Pilih Jobdesk</label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginTop: '6px' }}>
+                  {[
+                    { value: 'suhu', label: 'Suhu', icon: '🌡️', desc: 'Pemantauan suhu' },
+                    { value: 'inspeksi', label: 'Inspeksi', icon: '🔍', desc: 'Kegiatan inspeksi' },
+                    { value: 'analis', label: 'Analis', icon: '🧪', desc: 'Kegiatan analis' }
+                  ].map(jd => (
+                    <div 
+                      key={jd.value}
+                      onClick={() => setSelectedJobdesk(jd.value)}
+                      style={{
+                        padding: '10px 6px',
+                        borderRadius: '10px',
+                        border: selectedJobdesk === jd.value ? '2px solid var(--primary)' : '2px solid var(--card-border)',
+                        background: selectedJobdesk === jd.value ? 'rgba(99,102,241,0.1)' : 'transparent',
+                        cursor: 'pointer',
+                        textAlign: 'center',
+                        transition: 'all 0.2s ease'
+                      }}
+                    >
+                      <div style={{ fontSize: '1.3rem', marginBottom: '4px' }}>{jd.icon}</div>
+                      <div style={{ fontSize: '0.7rem', fontWeight: '700', color: selectedJobdesk === jd.value ? 'var(--primary)' : 'var(--text-primary)' }}>{jd.label}</div>
+                      <div style={{ fontSize: '0.55rem', color: 'var(--text-muted)', marginTop: '2px' }}>{jd.desc}</div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Username Selection/Input based on Role */}
             <div className="form-group">
@@ -2037,6 +2472,83 @@ export default function App() {
         </div>
       )}
 
+      {/* POPUP MODAL RESULT ABSENSI (Diluar Area / Sukses) */}
+      {attResultModal && (
+        <div className="modal-overlay" style={{ zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(5px)' }}>
+          <div className="glass-card modal-content" style={{ width: '100%', maxWidth: '420px', padding: '24px', textAlign: 'center', borderRadius: '20px', border: attResultModal.type === 'error' ? '2px solid rgba(239,68,68,0.5)' : '2px solid rgba(16,185,129,0.5)', background: '#1e293b', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.7)', animation: 'popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)' }}>
+            
+            <div style={{ width: '72px', height: '72px', borderRadius: '50%', background: attResultModal.type === 'error' ? 'rgba(239,68,68,0.15)' : 'rgba(16,185,129,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px auto', border: attResultModal.type === 'error' ? '2px solid rgba(239,68,68,0.3)' : '2px solid rgba(16,185,129,0.3)' }}>
+              {attResultModal.type === 'error' ? (
+                <ShieldAlert size={40} style={{ color: '#ef4444' }} />
+              ) : (
+                <CheckCircle size={40} style={{ color: '#10b981' }} />
+              )}
+            </div>
+
+            <h3 style={{ fontSize: '1.15rem', fontWeight: '800', color: attResultModal.type === 'error' ? '#ef4444' : '#10b981', marginBottom: '10px' }}>
+              {attResultModal.title}
+            </h3>
+
+            <p style={{ fontSize: '0.85rem', color: '#cbd5e1', marginBottom: '18px', whiteSpace: 'pre-line', lineHeight: '1.5' }}>
+              {attResultModal.message}
+            </p>
+
+            {attResultModal.type === 'error' && (
+              <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', padding: '14px', borderRadius: '12px', fontSize: '0.78rem', marginBottom: '20px', textAlign: 'left' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ color: '#94a3b8' }}>Stasiun Target:</span>
+                  <span style={{ fontWeight: 'bold', color: '#f8fafc' }}>{attResultModal.station}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ color: '#94a3b8' }}>Jarak Anda ke Titik:</span>
+                  <span style={{ fontWeight: 'bold', color: '#ef4444' }}>{attResultModal.distance} Meter</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#94a3b8' }}>Batas Radius Geofence:</span>
+                  <span style={{ fontWeight: 'bold', color: '#f8fafc' }}>{attResultModal.radiusLimit} Meter</span>
+                </div>
+              </div>
+            )}
+
+            {attResultModal.type === 'success' && (
+              <div style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)', padding: '14px', borderRadius: '12px', fontSize: '0.78rem', marginBottom: '20px', textAlign: 'left' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ color: '#94a3b8' }}>Nama Petugas:</span>
+                  <span style={{ fontWeight: 'bold', color: '#f8fafc' }}>{attResultModal.officer}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ color: '#94a3b8' }}>Stasiun Kerja:</span>
+                  <span style={{ fontWeight: 'bold', color: '#f8fafc' }}>{attResultModal.station}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <span style={{ color: '#94a3b8' }}>Shift / Waktu:</span>
+                  <span style={{ fontWeight: 'bold', color: '#f8fafc' }}>{attResultModal.shift} ({attResultModal.time})</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#94a3b8' }}>Status Persetujuan:</span>
+                  <span style={{ fontWeight: 'bold', color: '#10b981' }}>{attResultModal.status}</span>
+                </div>
+              </div>
+            )}
+
+            <button
+              className={`btn ${attResultModal.type === 'error' ? 'btn-danger' : 'btn-primary'}`}
+              onClick={() => {
+                const isSuccess = attResultModal.type === 'success';
+                setAttResultModal(null);
+                if (isSuccess) {
+                  setHistorySubTab('absensi');
+                  setActiveTab('history');
+                }
+              }}
+              style={{ width: '100%', padding: '12px', fontSize: '0.9rem', fontWeight: 'bold', borderRadius: '12px', boxShadow: '0 4px 14px rgba(0,0,0,0.3)' }}
+            >
+              {attResultModal.type === 'error' ? 'Tutup & Cek Lokasi' : 'OK, Mengerti'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="app-header">
         <div className="logo-container">
@@ -2045,7 +2557,7 @@ export default function App() {
           </div>
           <div className="logo-text">
             <h1>ThermaScan</h1>
-            <span>{currentUser.name} • {(currentUser.jobdesk || 'suhu').charAt(0).toUpperCase() + (currentUser.jobdesk || 'suhu').slice(1)}</span>
+            <span>{currentUser.role === 'KOPKAR' ? 'KOPKAR • Kehadiran & Audit' : `${currentUser.name} • ${(currentUser.jobdesk || 'suhu').charAt(0).toUpperCase() + (currentUser.jobdesk || 'suhu').slice(1)}`}</span>
           </div>
         </div>
         
@@ -2106,153 +2618,314 @@ export default function App() {
             </div>
 
 
-            <div className="stats-grid">
-              {(currentUser.jobdesk || 'suhu') === 'suhu' && (
-                <div className="glass-card stat-card">
-                  <span className="label">Laporan Hari Ini</span>
-                  <span className="value">{stats.totalToday}</span>
-                  <span className="desc">Total pemantauan suhu</span>
-                </div>
-              )}
-              {(currentUser.jobdesk || 'suhu') === 'suhu' && (
-                <div className="glass-card stat-card">
-                  <span className="value" style={{ color: stats.maxTempToday !== '-' ? 'var(--primary)' : 'var(--text-muted)' }}>
-                    {stats.maxTempToday}
-                  </span>
-                  <span className="label">Suhu Tertinggi Hari Ini</span>
-                  <span className="desc">Suhu alat tertinggi</span>
-                </div>
-              )}
-              {(currentUser.jobdesk || 'suhu') !== 'suhu' && (
-                <div className="glass-card stat-card">
-                  <span className="label">Total Kegiatan</span>
-                  <span className="value">{activities.filter(a => new Date(a.timestamp).toDateString() === new Date().toDateString()).length}</span>
-                  <span className="desc">Kegiatan hari ini</span>
-                </div>
-              )}
-              {(currentUser.jobdesk || 'suhu') !== 'suhu' && (
-                <div className="glass-card stat-card">
-                  <span className="label">Total Arsip Kegiatan</span>
-                  <span className="value">{activities.length}</span>
-                  <span className="desc">Semua laporan kegiatan</span>
-                </div>
-              )}
-            </div>
+            {/* KOPKAR SPECIFIC DASHBOARD */}
+            {currentUser.role === 'KOPKAR' ? (
+              <div>
+                {(() => {
+                  const todayStr = new Date().toDateString();
+                  const todayAtt = attendance.filter(a => new Date(a.timestamp).toDateString() === todayStr);
+                  const latestEvents = {};
+                  todayAtt.sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp)).forEach(a => {
+                    latestEvents[a.officer] = a;
+                  });
+                  const onDutyList = Object.values(latestEvents).filter(e => e.type === 'Check In');
+                  const checkedOutList = Object.values(latestEvents).filter(e => e.type === 'Check Out');
+                  const multiDevs = db.getMultiAccountAudit().filter(d => d.isMultiAccount);
 
-            {(currentUser.jobdesk || 'suhu') === 'suhu' && (
-              <div className="stats-grid" style={{ gridTemplateColumns: '1.2fr 0.8fr' }}>
-                <div className="glass-card stat-card" style={{ borderLeft: '4px solid var(--danger)' }}>
-                  <span className="label">Peringatan Suhu Tinggi</span>
-                  <span className="value" style={{ color: stats.alertCount > 0 ? 'var(--danger)' : 'var(--normal)' }}>
-                    {stats.alertCount} Laporan
-                  </span>
-                  <span className="desc">Mesin masuk kategori ALERT</span>
-                </div>
-                <div className="glass-card stat-card">
-                  <span className="label">Total Arsip</span>
-                  <span className="value">{stats.allTimeTotal}</span>
-                  <span className="desc">Semua laporan suhu</span>
-                </div>
+                  return (
+                    <>
+                      {/* Metric cards */}
+                      <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px', marginBottom: '16px' }}>
+                        <div className="glass-card stat-card" style={{ borderLeft: '4px solid #10b981' }}>
+                          <span className="label">Sedang Bertugas</span>
+                          <span className="value" style={{ color: '#10b981' }}>{onDutyList.length}</span>
+                          <span className="desc">Petugas aktif (Check In)</span>
+                        </div>
+                        <div className="glass-card stat-card">
+                          <span className="label">Total Check In</span>
+                          <span className="value">{todayAtt.filter(a => a.type === 'Check In').length}</span>
+                          <span className="desc">Absen masuk hari ini</span>
+                        </div>
+                        <div className="glass-card stat-card">
+                          <span className="label">Total Check Out</span>
+                          <span className="value">{todayAtt.filter(a => a.type === 'Check Out').length}</span>
+                          <span className="desc">Absen pulang hari ini</span>
+                        </div>
+                        <div className="glass-card stat-card" style={{ borderLeft: multiDevs.length > 0 ? '4px solid #ef4444' : '4px solid #3b82f6' }}>
+                          <span className="label">Audit Titip Absen</span>
+                          <span className="value" style={{ color: multiDevs.length > 0 ? '#ef4444' : '#10b981' }}>
+                            {multiDevs.length > 0 ? `${multiDevs.length} Perangkat` : '0 (Aman)'}
+                          </span>
+                          <span className="desc">Indikasi multi-akun</span>
+                        </div>
+                      </div>
+
+                      {/* Quick Actions */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+                        <button 
+                          className="btn btn-secondary"
+                          onClick={() => { setActiveTab('history'); setHistorySubTab('absensi'); }}
+                          style={{ padding: '10px 14px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontSize: '0.8rem', fontWeight: '600', borderColor: 'var(--primary)', color: 'var(--primary)', background: 'rgba(59, 130, 246, 0.08)' }}
+                        >
+                          <UserCheck size={16} /> Riwayat Absensi
+                        </button>
+                        <button 
+                          className="btn btn-secondary"
+                          onClick={() => { setActiveTab('history'); setHistorySubTab('audit'); }}
+                          style={{ padding: '10px 14px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontSize: '0.8rem', fontWeight: '600', borderColor: multiDevs.length > 0 ? '#ef4444' : 'var(--card-border)', color: multiDevs.length > 0 ? '#ef4444' : 'var(--text-primary)', background: multiDevs.length > 0 ? 'rgba(239, 68, 68, 0.08)' : 'var(--bg-tertiary)' }}
+                        >
+                          <Smartphone size={16} /> Audit Titip Absen
+                        </button>
+                      </div>
+
+                      {/* MAIN SECTION: SEDANG BERTUGAS (LIVE) */}
+                      <div className="glass-card" style={{ padding: '16px', marginBottom: '16px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', borderBottom: '1px solid var(--card-border)', paddingBottom: '10px' }}>
+                          <div>
+                            <h3 style={{ fontSize: '1.05rem', fontWeight: '700', color: '#10b981', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+                              <UserCheck size={18} /> Sedang Bertugas (Live)
+                              <span style={{ background: '#10b981', color: '#fff', fontSize: '0.65rem', padding: '2px 8px', borderRadius: '12px', fontWeight: '700' }}>
+                                {onDutyList.length} Personil
+                              </span>
+                            </h3>
+                            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                              Petugas yang telah melakukan Check In dan belum Check Out hari ini
+                            </span>
+                          </div>
+                          <button 
+                            className="btn btn-secondary"
+                            onClick={() => { setDownloadModalType('absensi'); setShowPeriodDownloadModal(true); }}
+                            style={{ padding: '6px 10px', fontSize: '0.7rem', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                          >
+                            <Download size={12} /> Unduh Laporan
+                          </button>
+                        </div>
+
+                        {onDutyList.length === 0 ? (
+                          <div style={{ textAlign: 'center', padding: '28px 10px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                            <div style={{ fontSize: '2rem', marginBottom: '8px' }}>🏢</div>
+                            Saat ini belum ada petugas yang tercatat sedang bertugas (Check In) untuk hari ini.
+                          </div>
+                        ) : (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '10px' }}>
+                            {onDutyList.map((att, idx) => (
+                              <div 
+                                key={idx} 
+                                onClick={() => setSelectedAttendance(att)}
+                                style={{ background: 'var(--bg-card)', border: '1px solid var(--card-border)', borderRadius: '10px', padding: '12px', cursor: 'pointer', transition: 'all 0.2s ease' }}
+                              >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 6px #10b981' }}></div>
+                                    <span style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-primary)' }}>{att.officer}</span>
+                                  </div>
+                                  <span style={{ 
+                                    fontSize: '0.65rem', 
+                                    padding: '2px 8px', 
+                                    borderRadius: '6px', 
+                                    fontWeight: '600',
+                                    background: att.jobdesk === 'analis' ? 'rgba(16, 185, 129, 0.15)' : (att.jobdesk === 'inspeksi' ? 'rgba(168, 85, 247, 0.15)' : 'rgba(59, 130, 246, 0.15)'),
+                                    color: att.jobdesk === 'analis' ? '#10b981' : (att.jobdesk === 'inspeksi' ? '#a855f7' : 'var(--primary)')
+                                  }}>
+                                    {(att.jobdesk || 'suhu').toUpperCase()}
+                                  </span>
+                                </div>
+
+                                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                    <span>Jam Check In:</span>
+                                    <strong style={{ color: 'var(--text-primary)' }}>
+                                      {new Date(att.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WITA
+                                    </strong>
+                                  </div>
+                                  {att.latitude && att.longitude && (
+                                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                      <span>GPS Koordinat:</span>
+                                      <span style={{ fontFamily: 'monospace' }}>{att.latitude.toFixed(4)}, {att.longitude.toFixed(4)}</span>
+                                    </div>
+                                  )}
+                                  {att.isFakeGps && (
+                                    <div style={{ color: '#ef4444', fontWeight: 'bold' }}>⚠️ Fake GPS Terdeteksi!</div>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* SECTION 2: CHECK OUT TODAY */}
+                      {checkedOutList.length > 0 && (
+                        <div className="glass-card" style={{ padding: '16px' }}>
+                          <h4 style={{ fontSize: '0.85rem', fontWeight: '700', color: 'var(--text-secondary)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <UserCheck size={14} /> Sudah Selesai Tugas (Check Out Hari Ini - {checkedOutList.length} Personil)
+                          </h4>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                            {checkedOutList.map((att, idx) => (
+                              <div key={idx} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--card-border)', borderRadius: '6px', padding: '6px 10px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ color: 'var(--text-muted)' }}>✓</span>
+                                <span style={{ fontWeight: '600' }}>{att.officer}</span>
+                                <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>({new Date(att.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })})</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
-            )}
-
-            {/* Quick Action Banners */}
-            <div style={{ display: 'grid', gridTemplateColumns: currentUser.role === 'Operator' ? ((currentUser.jobdesk || 'suhu') === 'suhu' ? '1fr 1fr 1fr' : '1fr 1fr') : '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
-              {(currentUser.jobdesk || 'suhu') === 'suhu' && (
-                <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: 0, padding: '14px', background: 'linear-gradient(135deg, rgba(99,102,241,0.1) 0%, rgba(168,85,247,0.1) 100%)' }}>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>🌡️ Pindai Suhu Alat</div>
-                  <button className="btn btn-primary" onClick={() => { setActiveTab('scan'); startCamera(); }} style={{ padding: '8px 12px', fontSize: '0.75rem', borderRadius: '8px' }}>
-                    <Camera size={14} /> Pindai Suhu
-                  </button>
+            ) : (
+              <>
+                <div className="stats-grid">
+                  {(currentUser.jobdesk || 'suhu') === 'suhu' && (
+                    <div className="glass-card stat-card">
+                      <span className="label">Laporan Hari Ini</span>
+                      <span className="value">{stats.totalToday}</span>
+                      <span className="desc">Total pemantauan suhu</span>
+                    </div>
+                  )}
+                  {(currentUser.jobdesk || 'suhu') === 'suhu' && (
+                    <div className="glass-card stat-card">
+                      <span className="value" style={{ color: stats.maxTempToday !== '-' ? 'var(--primary)' : 'var(--text-muted)' }}>
+                        {stats.maxTempToday}
+                      </span>
+                      <span className="label">Suhu Tertinggi Hari Ini</span>
+                      <span className="desc">Suhu alat tertinggi</span>
+                    </div>
+                  )}
+                  {(currentUser.jobdesk || 'suhu') !== 'suhu' && (
+                    <div className="glass-card stat-card">
+                      <span className="label">Total Kegiatan</span>
+                      <span className="value">{activities.filter(a => new Date(a.timestamp).toDateString() === new Date().toDateString()).length}</span>
+                      <span className="desc">Kegiatan hari ini</span>
+                    </div>
+                  )}
+                  {(currentUser.jobdesk || 'suhu') !== 'suhu' && (
+                    <div className="glass-card stat-card">
+                      <span className="label">Total Arsip Kegiatan</span>
+                      <span className="value">{activities.length}</span>
+                      <span className="desc">Semua laporan kegiatan</span>
+                    </div>
+                  )}
                 </div>
-              )}
-              {/* Kegiatan — tampil untuk semua jobdesk (suhu, inspeksi, analis) kecuali role tertentu */}
-              {(currentUser.role === 'Operator' || currentUser.role === 'Supervisor') && (
-                <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: 0, padding: '14px', background: 'linear-gradient(135deg, rgba(99,102,241,0.1) 0%, rgba(168,85,247,0.1) 100%)' }}>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>
-                    {(currentUser.jobdesk || 'suhu') === 'suhu' ? '📋' : (currentUser.jobdesk === 'inspeksi' ? '🔍' : '🧪')} Kegiatan {(currentUser.jobdesk || 'suhu') === 'suhu' ? 'Lapangan' : (currentUser.jobdesk === 'inspeksi' ? 'Inspeksi' : 'Analis')}
+
+                {(currentUser.jobdesk || 'suhu') === 'suhu' && (
+                  <div className="stats-grid" style={{ gridTemplateColumns: '1.2fr 0.8fr' }}>
+                    <div className="glass-card stat-card" style={{ borderLeft: '4px solid var(--danger)' }}>
+                      <span className="label">Peringatan Suhu Tinggi</span>
+                      <span className="value" style={{ color: stats.alertCount > 0 ? 'var(--danger)' : 'var(--normal)' }}>
+                        {stats.alertCount} Laporan
+                      </span>
+                      <span className="desc">Mesin masuk kategori ALERT</span>
+                    </div>
+                    <div className="glass-card stat-card">
+                      <span className="label">Total Arsip</span>
+                      <span className="value">{stats.allTimeTotal}</span>
+                      <span className="desc">Semua laporan suhu</span>
+                    </div>
                   </div>
-                  <button className="btn btn-primary" onClick={() => { setActiveTab('activity'); startActCamera(); stopCamera(); stopAttCamera(); }} style={{ padding: '8px 12px', fontSize: '0.75rem', borderRadius: '8px' }}>
-                    <Camera size={14} /> Ambil Foto Kegiatan
-                  </button>
-                </div>
-              )}
-              {currentUser.role === 'Operator' && (
-                <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: 0, padding: '14px', background: 'linear-gradient(135deg, rgba(16,185,129,0.1) 0%, rgba(99,102,241,0.1) 100%)' }}>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Absensi Petugas</div>
-                  <button className="btn btn-primary" onClick={() => { setActiveTab('attendance'); startAttCamera(); }} style={{ padding: '8px 12px', fontSize: '0.75rem', borderRadius: '8px', background: 'linear-gradient(135deg, #10b981, #059669)', boxShadow: '0 4px 14px rgba(16,185,129,0.25)' }}>
-                    <UserCheck size={14} /> Absen Foto
-                  </button>
-                </div>
-              )}
-            </div>
+                )}
 
-
-            {/* Advanced Dashboard Info */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
-              <div className="glass-card" style={{ marginBottom: 0, display: 'flex', flexDirection: 'column' }}>
-                <h3 className="section-title" style={{ fontSize: '0.8rem', marginBottom: '8px' }}>
-                  <TrendingUp size={14} style={{ color: 'var(--primary)' }} />
-                  Top Uploader (7 Hari)
-                </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  {(() => {
-                    const sevenDaysAgo = new Date();
-                    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-                    const countMap = {};
-                    reports.forEach(r => {
-                        if (new Date(r.timestamp) >= sevenDaysAgo && r.officer) countMap[r.officer] = (countMap[r.officer] || 0) + 1;
-                    });
-                    activities.forEach(a => {
-                        if (new Date(a.timestamp) >= sevenDaysAgo && a.officer) countMap[a.officer] = (countMap[a.officer] || 0) + 1;
-                    });
-                    const top = Object.entries(countMap).sort((a,b) => b[1] - a[1]).slice(0, 3);
-                    if (top.length === 0) return <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Belum ada data mingguan.</span>;
-                    return top.map((t, idx) => (
-                      <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', padding: '4px', background: 'rgba(255,255,255,0.03)', borderRadius: '4px' }}>
-                        <span style={{ fontWeight: 'bold' }}>{idx+1}. {t[0]}</span>
-                        <span style={{ color: 'var(--primary)' }}>{t[1]} Laporan</span>
+                {/* Quick Action Banners */}
+                <div style={{ display: 'grid', gridTemplateColumns: currentUser.role === 'Operator' ? ((currentUser.jobdesk || 'suhu') === 'suhu' ? '1fr 1fr 1fr' : '1fr 1fr') : '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+                  {(currentUser.jobdesk || 'suhu') === 'suhu' && (
+                    <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: 0, padding: '14px', background: 'linear-gradient(135deg, rgba(99,102,241,0.1) 0%, rgba(168,85,247,0.1) 100%)' }}>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>🌡️ Pindai Suhu Alat</div>
+                      <button className="btn btn-primary" onClick={() => { setActiveTab('scan'); startCamera(); }} style={{ padding: '8px 12px', fontSize: '0.75rem', borderRadius: '8px' }}>
+                        <Camera size={14} /> Pindai Suhu
+                      </button>
+                    </div>
+                  )}
+                  {/* Kegiatan — tampil untuk semua jobdesk (suhu, inspeksi, analis) kecuali role tertentu */}
+                  {(currentUser.role === 'Operator' || currentUser.role === 'Supervisor') && (
+                    <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: 0, padding: '14px', background: 'linear-gradient(135deg, rgba(99,102,241,0.1) 0%, rgba(168,85,247,0.1) 100%)' }}>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>
+                        {(currentUser.jobdesk || 'suhu') === 'suhu' ? '📋' : (currentUser.jobdesk === 'inspeksi' ? '🔍' : '🧪')} Kegiatan {(currentUser.jobdesk || 'suhu') === 'suhu' ? 'Lapangan' : (currentUser.jobdesk === 'inspeksi' ? 'Inspeksi' : 'Analis')}
                       </div>
-                    ));
-                  })()}
+                      <button className="btn btn-primary" onClick={() => { setActiveTab('activity'); startActCamera(); stopCamera(); stopAttCamera(); }} style={{ padding: '8px 12px', fontSize: '0.75rem', borderRadius: '8px' }}>
+                        <Camera size={14} /> Ambil Foto Kegiatan
+                      </button>
+                    </div>
+                  )}
+                  {currentUser.role === 'Operator' && (
+                    <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: 0, padding: '14px', background: 'linear-gradient(135deg, rgba(16,185,129,0.1) 0%, rgba(99,102,241,0.1) 100%)' }}>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 'bold' }}>Absensi Petugas</div>
+                      <button className="btn btn-primary" onClick={() => { setActiveTab('attendance'); startAttCamera(); }} style={{ padding: '8px 12px', fontSize: '0.75rem', borderRadius: '8px', background: 'linear-gradient(135deg, #10b981, #059669)', boxShadow: '0 4px 14px rgba(16,185,129,0.25)' }}>
+                        <UserCheck size={14} /> Absen Foto
+                      </button>
+                    </div>
+                  )}
                 </div>
-              </div>
 
-              <div className="glass-card" style={{ marginBottom: 0, display: 'flex', flexDirection: 'column' }}>
-                <h3 className="section-title" style={{ fontSize: '0.8rem', marginBottom: '8px' }}>
-                  <UserCheck size={14} style={{ color: '#10b981' }} />
-                  Sedang Bertugas (Live)
-                </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  {(() => {
-                    const todayStr = new Date().toDateString();
-                    const todayAtt = attendance.filter(a => new Date(a.timestamp).toDateString() === todayStr);
-                    const latestEvents = {};
-                    todayAtt.sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp)).forEach(a => {
-                        latestEvents[a.officer] = a;
-                    });
-                    const checkedIn = Object.entries(latestEvents).filter(([_, event]) => event.type === 'Check In').map(e => e[0]);
-                    if (checkedIn.length === 0) return <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Tidak ada petugas di lapangan.</span>;
-                    return checkedIn.map((officer, idx) => (
-                      <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', padding: '4px' }}>
-                        <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 5px #10b981' }}></div>
-                        <span>{officer}</span>
-                      </div>
-                    ));
-                  })()}
+
+                {/* Advanced Dashboard Info */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+                  <div className="glass-card" style={{ marginBottom: 0, display: 'flex', flexDirection: 'column' }}>
+                    <h3 className="section-title" style={{ fontSize: '0.8rem', marginBottom: '8px' }}>
+                      <TrendingUp size={14} style={{ color: 'var(--primary)' }} />
+                      Top Uploader (7 Hari)
+                    </h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {(() => {
+                        const sevenDaysAgo = new Date();
+                        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+                        const countMap = {};
+                        reports.forEach(r => {
+                            if (new Date(r.timestamp) >= sevenDaysAgo && r.officer) countMap[r.officer] = (countMap[r.officer] || 0) + 1;
+                        });
+                        activities.forEach(a => {
+                            if (new Date(a.timestamp) >= sevenDaysAgo && a.officer) countMap[a.officer] = (countMap[a.officer] || 0) + 1;
+                        });
+                        const top = Object.entries(countMap).sort((a,b) => b[1] - a[1]).slice(0, 3);
+                        if (top.length === 0) return <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Belum ada data mingguan.</span>;
+                        return top.map((t, idx) => (
+                          <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', padding: '4px', background: 'rgba(255,255,255,0.03)', borderRadius: '4px' }}>
+                            <span style={{ fontWeight: 'bold' }}>{idx+1}. {t[0]}</span>
+                            <span style={{ color: 'var(--primary)' }}>{t[1]} Laporan</span>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  </div>
+
+                  <div className="glass-card" style={{ marginBottom: 0, display: 'flex', flexDirection: 'column' }}>
+                    <h3 className="section-title" style={{ fontSize: '0.8rem', marginBottom: '8px' }}>
+                      <UserCheck size={14} style={{ color: '#10b981' }} />
+                      Sedang Bertugas (Live)
+                    </h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {(() => {
+                        const todayStr = new Date().toDateString();
+                        const todayAtt = attendance.filter(a => new Date(a.timestamp).toDateString() === todayStr);
+                        const latestEvents = {};
+                        todayAtt.sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp)).forEach(a => {
+                            latestEvents[a.officer] = a;
+                        });
+                        const checkedIn = Object.entries(latestEvents).filter(([_, event]) => event.type === 'Check In').map(e => e[0]);
+                        if (checkedIn.length === 0) return <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Tidak ada petugas di lapangan.</span>;
+                        return checkedIn.map((officer, idx) => (
+                          <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', padding: '4px' }}>
+                            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 5px #10b981' }}></div>
+                            <span>{officer}</span>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
 
-            {/* Chart Container — hanya tampil untuk jobdesk suhu */}
-            {(currentUser.jobdesk || 'suhu') === 'suhu' && (
-              <div className="glass-card">
-                <h3 className="section-title">
-                  <TrendingUp size={16} style={{ color: 'var(--primary)' }} />
-                  Tren Suhu Terakhir
-                </h3>
-                {renderDashboardChart()}
-              </div>
+                {/* Chart Container — hanya tampil untuk jobdesk suhu */}
+                {(currentUser.jobdesk || 'suhu') === 'suhu' && (
+                  <div className="glass-card">
+                    <h3 className="section-title">
+                      <TrendingUp size={16} style={{ color: 'var(--primary)' }} />
+                      Tren Suhu Terakhir
+                    </h3>
+                    {renderDashboardChart()}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
@@ -2483,6 +3156,103 @@ export default function App() {
 
           return (
             <div>
+              {/* --- AUDIT DETEKSI MULTI-AKUN PERANGKAT (Titip Absen & Pekerjaan) --- */}
+              {(() => {
+                const auditList = db.getMultiAccountAudit();
+                const multiDevs = auditList.filter(d => d.isMultiAccount);
+
+                return (
+                  <div className="glass-card" style={{ marginBottom: '20px', padding: '18px 20px', borderLeft: multiDevs.length > 0 ? '4px solid #ef4444' : '4px solid #10b981' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div style={{ background: multiDevs.length > 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)', color: multiDevs.length > 0 ? '#ef4444' : '#10b981', padding: '8px', borderRadius: '8px' }}>
+                          <Smartphone size={20} />
+                        </div>
+                        <div>
+                          <h3 style={{ fontSize: '1.05rem', fontWeight: '700', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            Audit Perangkat & Deteksi Titip Absen
+                            {multiDevs.length > 0 && (
+                              <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.65rem', padding: '2px 8px', borderRadius: '12px', fontWeight: '700' }}>
+                                {multiDevs.length} Perangkat Terindikasi
+                              </span>
+                            )}
+                          </h3>
+                          <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0 }}>
+                            Mendeteksi jika 1 HP / Laptop digunakan oleh lebih dari 1 akun Operator (Indikasi titip absen / titip pekerjaan)
+                          </p>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <button 
+                          onClick={() => {
+                            setDownloadModalType('audit');
+                            setShowPeriodDownloadModal(true);
+                          }}
+                          className="btn btn-secondary"
+                          style={{ padding: '6px 12px', fontSize: '0.75rem', borderColor: 'rgba(59, 130, 246, 0.4)', color: 'var(--primary)', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                          title="Unduh laporan audit perangkat dan indikasi titip absen dalam format CSV atau PDF"
+                        >
+                          <Download size={14} /> Unduh Laporan Audit
+                        </button>
+                        <button 
+                          onClick={handleClearDeviceAudit}
+                          className="btn btn-secondary"
+                          style={{ padding: '6px 12px', fontSize: '0.75rem', borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.05)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                          title="Hapus riwayat audit perangkat dan bersihkan deteksi titip absen"
+                        >
+                          <Trash2 size={14} /> Hapus Histori Audit
+                        </button>
+                      </div>
+                    </div>
+
+                    {multiDevs.length > 0 ? (
+                      <div>
+                        <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#ef4444', padding: '10px 14px', borderRadius: '8px', fontSize: '0.8rem', fontWeight: '600', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <AlertTriangle size={18} />
+                          <span>PERINGATAN: Terdeteksi {multiDevs.length} Perangkat HP/Laptop yang digunakan oleh beberapa akun Operator berbeda!</span>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
+                          {multiDevs.map((dev, idx) => (
+                            <div key={idx} style={{ background: 'var(--bg-card)', border: '1px solid rgba(239, 68, 68, 0.4)', borderRadius: '10px', padding: '12px 14px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                <span style={{ fontSize: '0.75rem', fontWeight: '700', fontFamily: 'monospace', color: 'var(--text-primary)' }}>
+                                  📱 Perangkat ID: {dev.deviceId}
+                                </span>
+                                <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.65rem', fontWeight: '700', padding: '2px 8px', borderRadius: '12px' }}>
+                                  {dev.userCount} Akun Operator
+                                </span>
+                              </div>
+
+                              <div style={{ fontSize: '0.75rem', marginBottom: '8px' }}>
+                                <div style={{ fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '4px' }}>Akun Operator yang Pernah Login/Absen di HP ini:</div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                  {dev.users.map((u, i) => (
+                                    <span key={i} style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '3px 8px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: '600' }}>
+                                      👤 {u.name} ({u.count}x {u.lastAction})
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--card-border)', paddingTop: '6px', marginTop: '6px', display: 'flex', justifyContent: 'space-between' }}>
+                                <span>Aktivitas Terakhir:</span>
+                                <strong>{new Date(dev.lastActive).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })}</strong>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#10b981', padding: '10px 14px', borderRadius: '8px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <CheckCircle size={18} />
+                        <span><strong>Semua Perangkat Steril:</strong> Belum terdeteksi penggunaan 1 HP/Laptop oleh lebih dari 1 akun Operator.</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               <div className="glass-card" style={{ marginBottom: '16px' }}>
                 <h3 className="section-title">
                   <CheckSquare size={16} style={{ color: 'var(--primary)' }} />
@@ -2647,7 +3417,7 @@ export default function App() {
                 )}
 
                 {/* Station / Stasiun Kerja Selection */}
-                {attType === 'Check In' && (
+                {['Check In', 'Check Out'].includes(attType) && (
                   <div className="form-group">
                     <label>Stasiun / Lokasi Kerja Saat Ini *</label>
                     <select 
@@ -2789,7 +3559,7 @@ export default function App() {
 
                           {/* Geofence Distance Indicator */}
                           {(() => {
-                            if (settings.enableGeofence && ['Check In', 'Check Out'].includes(attType)) {
+                            if (['Check In', 'Check Out'].includes(attType)) {
                               const target = getTargetGeofence(currentUser.jobdesk, attShift, settings, attStation, stationCoords);
                               const dist = calculateDistance(
                                 attGpsData.latitude,
@@ -2829,121 +3599,6 @@ export default function App() {
                     </div>
                   )}
                 </div>
-
-                {/* === PETA LEAFLET (OpenStreetMap) === */}
-                {settings.enableGeofence && ['Check In', 'Check Out'].includes(attType) && attGpsData && attGpsData.latitude && (() => {
-                  const target = getTargetGeofence(currentUser.jobdesk, attShift, settings, attStation, stationCoords);
-                  const dist = calculateDistance(attGpsData.latitude, attGpsData.longitude, target.lat, target.lon);
-                  const isWithin = dist !== null && dist <= target.radius;
-
-                  return (
-                    <div style={{ marginTop: '12px' }}>
-                      {/* Map Container */}
-                      <div 
-                        ref={(el) => {
-                          attMapContainerRef.current = el;
-                          // Initialize/update Leaflet map
-                          if (el && typeof window !== 'undefined' && window.L) {
-                            // Clean up existing map
-                            if (attMapRef.current) {
-                              attMapRef.current.remove();
-                              attMapRef.current = null;
-                            }
-                            
-                            const L = window.L;
-                            const map = L.map(el, { 
-                              zoomControl: true, 
-                              attributionControl: true,
-                              dragging: true,
-                              scrollWheelZoom: false
-                            });
-                            
-                            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                              attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-                              maxZoom: 19
-                            }).addTo(map);
-
-                            // Blue marker — lokasi karyawan
-                            const employeeIcon = L.divIcon({
-                              html: '<div style="width:14px;height:14px;background:#3b82f6;border-radius:50%;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3)"></div>',
-                              iconSize: [14, 14],
-                              iconAnchor: [7, 7],
-                              className: ''
-                            });
-                            L.marker([attGpsData.latitude, attGpsData.longitude], { icon: employeeIcon })
-                              .addTo(map)
-                              .bindPopup(`<b>📍 Lokasi Anda</b><br>Akurasi: ±${attGpsData.accuracy}m`);
-
-                            // Red/Green circle — geofence radius area kerja
-                            const circleColor = isWithin ? '#10b981' : '#ef4444';
-                            L.circle([target.lat, target.lon], {
-                              radius: target.radius,
-                              color: circleColor,
-                              fillColor: circleColor,
-                              fillOpacity: 0.15,
-                              weight: 2
-                            }).addTo(map);
-
-                            // Red pin — lokasi area kerja
-                            const workIcon = L.divIcon({
-                              html: '<div style="width:12px;height:12px;background:#ef4444;border-radius:50%;border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3)"></div>',
-                              iconSize: [12, 12],
-                              iconAnchor: [6, 6],
-                              className: ''
-                            });
-                            L.marker([target.lat, target.lon], { icon: workIcon })
-                              .addTo(map)
-                              .bindPopup(`<b>🏭 ${target.label}</b><br>Radius: ${target.radius}m`);
-
-                            // Fit bounds to show both markers
-                            const bounds = L.latLngBounds(
-                              [attGpsData.latitude, attGpsData.longitude],
-                              [target.lat, target.lon]
-                            ).pad(0.3);
-                            map.fitBounds(bounds, { maxZoom: 17 });
-
-                            attMapRef.current = map;
-
-                            // Fix map rendering after DOM paint
-                            setTimeout(() => map.invalidateSize(), 200);
-                          }
-                        }}
-                        style={{ 
-                          width: '100%', 
-                          height: '200px', 
-                          borderRadius: '12px', 
-                          overflow: 'hidden',
-                          border: '1px solid var(--card-border)',
-                          background: '#e5e7eb'
-                        }}
-                      />
-                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px', textAlign: 'center' }}>
-                        🔵 Lokasi Anda &nbsp; | &nbsp; 🔴 Area Kerja: {target.label} &nbsp; | &nbsp; Jarak: {dist !== null ? dist.toFixed(0) : '?'}m
-                      </div>
-
-                      {/* WARNING POPUP — Di Luar Radius */}
-                      {!isWithin && dist !== null && (
-                        <div style={{ 
-                          marginTop: '10px', 
-                          padding: '14px', 
-                          borderRadius: '12px', 
-                          background: 'rgba(239,68,68,0.08)', 
-                          border: '1px solid rgba(239,68,68,0.25)',
-                          textAlign: 'center'
-                        }}>
-                          <div style={{ fontSize: '2.5rem', marginBottom: '6px' }}>⚠️</div>
-                          <div style={{ fontSize: '0.85rem', fontWeight: 'bold', color: '#ef4444' }}>
-                            Jarak Anda dengan Lokasi Kerja Terlalu Jauh!
-                          </div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                            Anda berada <strong>{dist.toFixed(0)} meter</strong> dari area <strong>{target.label}</strong> (Batas: {target.radius}m).
-                            <br />Pastikan Anda berada di lokasi kerja yang benar sebelum melakukan absensi.
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
 
                 {/* Notes/Keterangan Field for Sakit/Izin/Cuti */}
                 {!['Check In', 'Check Out'].includes(attType) && (
@@ -2992,7 +3647,6 @@ export default function App() {
                 {(() => {
                   const target = getTargetGeofence(currentUser.jobdesk, attShift, settings, attStation, stationCoords);
                   const isGeofenceBlocked = 
-                    settings.enableGeofence && 
                     ['Check In', 'Check Out'].includes(attType) && 
                     attGpsData && 
                     attGpsData.latitude && 
@@ -3011,18 +3665,18 @@ export default function App() {
                         width: '100%', 
                         marginTop: '16px', 
                         background: isGeofenceBlocked 
-                          ? 'var(--bg-tertiary)' 
+                          ? 'linear-gradient(135deg, #ef4444, #b91c1c)' 
                           : attType === 'Check In' ? 'linear-gradient(135deg, #10b981, #059669)'
                           : attType === 'Check Out' ? 'linear-gradient(135deg, #f59e0b, #d97706)'
                           : attType === 'Sakit' ? 'linear-gradient(135deg, #ef4444, #dc2626)'
                           : attType === 'Izin' ? 'linear-gradient(135deg, #3b82f6, #2563eb)'
                           : 'linear-gradient(135deg, #06b6d4, #0891b2)',
                         border: 'none',
-                        cursor: isGeofenceBlocked ? 'not-allowed' : 'pointer'
+                        cursor: 'pointer'
                       }}
-                      disabled={attGpsLoading || isGeofenceBlocked}
+                      disabled={attGpsLoading}
                     >
-                      {isGeofenceBlocked ? '⚠️ Di Luar Radius Absensi' : `Kirim Absensi ${attType}`}
+                      {isGeofenceBlocked ? `⚠️ Kirim Absensi ${attType} (Di Luar Radius)` : `Kirim Absensi ${attType}`}
                     </button>
                   );
                 })()}
@@ -3036,7 +3690,26 @@ export default function App() {
           <div>
             {/* Top Sub-Nav Tabs */}
             <div style={{ display: 'flex', background: 'var(--bg-secondary)', borderRadius: '12px', padding: '4px', marginBottom: '14px', border: '1px solid var(--card-border)' }}>
-              {(currentUser.jobdesk || 'suhu') === 'suhu' ? (
+              {currentUser.role === 'KOPKAR' ? (
+                <>
+                  <button 
+                    className={`btn`} 
+                    style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.75rem', fontWeight: '600', background: historySubTab === 'absensi' ? 'var(--bg-tertiary)' : 'transparent', color: historySubTab === 'absensi' ? '#fff' : 'var(--text-muted)' }}
+                    onClick={() => setHistorySubTab('absensi')}
+                  >
+                    <UserCheck size={14} style={{ marginRight: '6px', display: 'inline' }} />
+                    Riwayat Absensi ({filteredAttendance.length})
+                  </button>
+                  <button 
+                    className={`btn`} 
+                    style={{ flex: 1, padding: '8px', borderRadius: '8px', fontSize: '0.75rem', fontWeight: '600', background: historySubTab === 'audit' ? 'var(--bg-tertiary)' : 'transparent', color: historySubTab === 'audit' ? '#fff' : 'var(--text-muted)' }}
+                    onClick={() => setHistorySubTab('audit')}
+                  >
+                    <Smartphone size={14} style={{ marginRight: '6px', display: 'inline' }} />
+                    Audit & Titip Absen ({db.getMultiAccountAudit().filter(d => d.isMultiAccount).length > 0 ? `${db.getMultiAccountAudit().filter(d => d.isMultiAccount).length} Indikasi` : 'Aman'})
+                  </button>
+                </>
+              ) : (currentUser.jobdesk || 'suhu') === 'suhu' ? (
                 <>
                   <button 
                     className={`btn`} 
@@ -3093,20 +3766,61 @@ export default function App() {
               )}
             </div>
 
-            {/* Global Date Filter for History */}
-            <div className="glass-card" style={{ padding: '10px 14px', marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-secondary)' }}>
-                <Calendar size={12} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'text-bottom' }} />
-                Filter Rentang Waktu
+            {/* Global Date Filter for History with Quick Presets & Download per Periode */}
+            <div className="glass-card" style={{ padding: '12px 14px', marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+                <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Calendar size={14} style={{ color: 'var(--primary)' }} />
+                  Filter Rentang Periode Waktu
+                </div>
+                <button 
+                  className="btn btn-secondary" 
+                  onClick={() => {
+                    setDownloadModalType(historySubTab === 'serah_terima' ? 'handover' : historySubTab);
+                    setShowPeriodDownloadModal(true);
+                  }}
+                  style={{ padding: '4px 10px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px', color: 'var(--primary)', borderColor: 'var(--primary)', background: 'rgba(59, 130, 246, 0.08)', display: 'flex', alignItems: 'center', gap: '5px' }}
+                >
+                  <Download size={12} /> Unduh per Periode
+                </button>
               </div>
+
+              {/* Quick Period Preset Buttons */}
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {[
+                  { id: 'all', label: 'Semua Waktu' },
+                  { id: 'today', label: 'Hari Ini' },
+                  { id: '7days', label: '7 Hari Terakhir' },
+                  { id: 'this_month', label: 'Bulan Ini' }
+                ].map(p => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => applyPeriodPreset(p.id, setHistoryStartDate, setHistoryEndDate, setHistoryPeriodPreset)}
+                    className="btn btn-secondary"
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '0.7rem',
+                      height: 'auto',
+                      borderRadius: '6px',
+                      background: historyPeriodPreset === p.id ? 'var(--primary)' : 'var(--bg-tertiary)',
+                      color: historyPeriodPreset === p.id ? '#fff' : 'var(--text-secondary)',
+                      borderColor: historyPeriodPreset === p.id ? 'var(--primary)' : 'var(--card-border)'
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                 <div>
                   <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Dari Tanggal</label>
-                  <input type="date" className="form-control" style={{ padding: '6px 8px', fontSize: '0.75rem' }} value={historyStartDate} onChange={(e) => setHistoryStartDate(e.target.value)} />
+                  <input type="date" className="form-control" style={{ padding: '6px 8px', fontSize: '0.75rem' }} value={historyStartDate} onChange={(e) => { setHistoryStartDate(e.target.value); setHistoryPeriodPreset('custom'); }} />
                 </div>
                 <div>
                   <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Sampai Tanggal</label>
-                  <input type="date" className="form-control" style={{ padding: '6px 8px', fontSize: '0.75rem' }} value={historyEndDate} onChange={(e) => setHistoryEndDate(e.target.value)} />
+                  <input type="date" className="form-control" style={{ padding: '6px 8px', fontSize: '0.75rem' }} value={historyEndDate} onChange={(e) => { setHistoryEndDate(e.target.value); setHistoryPeriodPreset('custom'); }} />
                 </div>
               </div>
             </div>
@@ -3162,6 +3876,9 @@ export default function App() {
                     Ditemukan {filteredReports.length} Laporan Suhu
                   </span>
                   <div style={{ display: 'flex', gap: '8px' }}>
+                    <button className="btn btn-secondary" onClick={handleExportExcel} style={{ padding: '6px 12px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px', color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.4)', fontWeight: '600' }}>
+                      <Download size={14} /> Excel (.xlsx)
+                    </button>
                     <button className="btn btn-secondary" onClick={() => db.exportToPDF(filteredReports)} style={{ padding: '6px 12px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px' }}>
                       <Download size={14} /> PDF
                     </button>
@@ -3205,7 +3922,7 @@ export default function App() {
                           </div>
                           <div className="report-value-area">
                             <span className="report-temp" style={{ color: status.color }}>
-                              {r.temperature.toFixed(1)}°C
+                              {(Number(r.temperature) || 0).toFixed(1)}°C
                             </span>
                             <span className={`status-badge ${status.class}`} style={{ fontSize: '0.5rem', padding: '1px 5px' }}>
                               {status.label.split(' ')[0]}
@@ -3254,6 +3971,9 @@ export default function App() {
                     Ditemukan {filteredActivities.length} Kegiatan
                   </span>
                   <div style={{ display: 'flex', gap: '8px' }}>
+                    <button className="btn btn-secondary" onClick={handleExportExcel} style={{ padding: '6px 12px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px', color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.4)', fontWeight: '600' }}>
+                      <Download size={14} /> Excel (.xlsx)
+                    </button>
                     <button className="btn btn-secondary" onClick={() => db.exportActivitiesToPDF(filteredActivities)} style={{ padding: '6px 12px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px' }}>
                       <Download size={14} /> PDF
                     </button>
@@ -3304,7 +4024,8 @@ export default function App() {
             )}
 
             {/* Sub-Tab 3: Absensi Petugas */}
-            {(((currentUser.jobdesk || 'suhu') === 'suhu' && historySubTab === 'absensi') || 
+            {((currentUser.role === 'KOPKAR' && historySubTab === 'absensi') ||
+              ((currentUser.jobdesk || 'suhu') === 'suhu' && historySubTab === 'absensi') || 
               ((currentUser.jobdesk || 'suhu') !== 'suhu' && historyActSubTab === 'absensi')) && (
               <div>
                 <div className="glass-card" style={{ padding: '14px' }}>
@@ -3357,6 +4078,9 @@ export default function App() {
                     Ditemukan {filteredAttendance.length} Riwayat Absensi
                   </span>
                   <div style={{ display: 'flex', gap: '8px' }}>
+                    <button className="btn btn-secondary" onClick={handleExportExcel} style={{ padding: '6px 12px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px', color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.4)', fontWeight: '600' }}>
+                      <Download size={14} /> Excel (.xlsx)
+                    </button>
                     <button className="btn btn-secondary" onClick={() => db.exportAttendanceToPDF(filteredAttendance)} style={{ padding: '6px 12px', fontSize: '0.7rem', height: 'auto', borderRadius: '8px' }}>
                       <Download size={14} /> PDF
                     </button>
@@ -3427,6 +4151,149 @@ export default function App() {
                     })}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Sub-Tab: Audit Perangkat & Deteksi Titip Absen */}
+            {historySubTab === 'audit' && (
+              <div>
+                {(() => {
+                  const auditList = db.getMultiAccountAudit();
+                  const multiDevs = auditList.filter(d => d.isMultiAccount);
+                  return (
+                    <div>
+                      {/* Top Action Card */}
+                      <div className="glass-card" style={{ padding: '14px', marginBottom: '14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <div style={{ background: multiDevs.length > 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)', color: multiDevs.length > 0 ? '#ef4444' : '#10b981', padding: '8px', borderRadius: '8px' }}>
+                            <Smartphone size={20} />
+                          </div>
+                          <div>
+                            <h3 style={{ fontSize: '1rem', fontWeight: '700', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              Audit Perangkat & Deteksi Titip Absen
+                              {multiDevs.length > 0 ? (
+                                <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.65rem', padding: '2px 8px', borderRadius: '12px', fontWeight: '700' }}>
+                                  {multiDevs.length} Perangkat Terindikasi
+                                </span>
+                              ) : (
+                                <span style={{ background: '#10b981', color: '#fff', fontSize: '0.65rem', padding: '2px 8px', borderRadius: '12px', fontWeight: '700' }}>
+                                  Aman (0 Terindikasi)
+                                </span>
+                              )}
+                            </h3>
+                            <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: 0 }}>
+                              Mendeteksi jika 1 HP / Laptop digunakan oleh lebih dari 1 akun Operator (Indikasi titip absen)
+                            </p>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          <button 
+                            onClick={() => {
+                              setDownloadModalType('audit');
+                              setShowPeriodDownloadModal(true);
+                            }}
+                            className="btn btn-secondary"
+                            style={{ padding: '6px 12px', fontSize: '0.75rem', borderColor: 'rgba(59, 130, 246, 0.4)', color: 'var(--primary)', background: 'rgba(59, 130, 246, 0.05)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                          >
+                            <Download size={14} /> Unduh Laporan Audit
+                          </button>
+                          {currentUser.role === 'Administrator' && (
+                            <button 
+                              onClick={handleClearDeviceAudit}
+                              className="btn btn-secondary"
+                              style={{ padding: '6px 12px', fontSize: '0.75rem', borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.05)', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                            >
+                              <Trash2 size={14} /> Hapus Histori Audit
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Content */}
+                      {multiDevs.length > 0 ? (
+                        <div>
+                          <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#ef4444', padding: '10px 14px', borderRadius: '8px', fontSize: '0.8rem', fontWeight: '600', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <AlertTriangle size={18} />
+                            <span>PERINGATAN: Terdeteksi {multiDevs.length} Perangkat HP/Laptop yang digunakan oleh beberapa akun Operator berbeda!</span>
+                          </div>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
+                            {multiDevs.map((dev, idx) => (
+                              <div key={idx} style={{ background: 'var(--bg-card)', border: '1px solid rgba(239, 68, 68, 0.4)', borderRadius: '10px', padding: '12px 14px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                  <span style={{ fontSize: '0.75rem', fontWeight: '700', fontFamily: 'monospace', color: 'var(--text-primary)' }}>
+                                    📱 Perangkat ID: {dev.deviceId}
+                                  </span>
+                                  <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.65rem', fontWeight: '700', padding: '2px 8px', borderRadius: '12px' }}>
+                                    {dev.userCount} Akun Operator
+                                  </span>
+                                </div>
+
+                                <div style={{ fontSize: '0.75rem', marginBottom: '8px' }}>
+                                  <div style={{ fontWeight: '600', color: 'var(--text-secondary)', marginBottom: '4px' }}>Akun Operator yang Pernah Login/Absen di HP ini:</div>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                                    {dev.users.map((u, i) => (
+                                      <span key={i} style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '3px 8px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: '600' }}>
+                                        👤 {u.name} ({u.count}x {u.lastAction})
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+
+                                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--card-border)', paddingTop: '6px', marginTop: '6px', display: 'flex', justifyContent: 'space-between' }}>
+                                  <span>Aktivitas Terakhir:</span>
+                                  <strong>{new Date(dev.lastActive).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })}</strong>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#10b981', padding: '14px', borderRadius: '10px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <CheckCircle size={22} />
+                          <div>
+                            <div style={{ fontWeight: 'bold' }}>Status Aman: Seluruh Perangkat Tertib!</div>
+                            <span style={{ fontSize: '0.75rem', opacity: 0.9 }}>Tidak ada indikasi HP/Laptop yang dipakai bergantian oleh beberapa akun Operator (Tidak ada titip absen).</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* All registered devices table */}
+                      {auditList.length > 0 && (
+                        <div className="glass-card" style={{ padding: '14px', marginTop: '16px' }}>
+                          <h4 style={{ fontSize: '0.85rem', fontWeight: '700', marginBottom: '10px', color: 'var(--text-secondary)' }}>
+                            Daftar Seluruh Perangkat Terdaftar ({auditList.length} Perangkat)
+                          </h4>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {auditList.map((dev, idx) => (
+                              <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', background: 'rgba(255,255,255,0.02)', borderRadius: '6px', fontSize: '0.75rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <span style={{ fontFamily: 'monospace', color: dev.isMultiAccount ? '#ef4444' : 'var(--text-primary)', fontWeight: '600' }}>
+                                    📱 {dev.deviceId}
+                                  </span>
+                                  <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
+                                    ({dev.users.map(u => u.name).join(', ')})
+                                  </span>
+                                </div>
+                                <span style={{ 
+                                  fontSize: '0.65rem', 
+                                  padding: '2px 8px', 
+                                  borderRadius: '10px', 
+                                  fontWeight: '700',
+                                  background: dev.isMultiAccount ? 'rgba(239,68,68,0.15)' : 'rgba(16,185,129,0.15)',
+                                  color: dev.isMultiAccount ? '#ef4444' : '#10b981'
+                                }}>
+                                  {dev.isMultiAccount ? `⚠️ ${dev.userCount} Akun` : '✓ 1 Akun'}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
@@ -3849,8 +4716,17 @@ export default function App() {
                   const coord = stationCoords[loc] || { lat: -4.786256, lon: 119.614108, radius: 100 };
                   return (
                     <div key={idx} style={{ background: 'rgba(255,255,255,0.02)', padding: '10px 12px', borderRadius: '10px', border: '1px solid var(--card-border)' }}>
-                      <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '6px' }}>
-                        📍 {loc}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: 'var(--text-primary)' }}>
+                          📍 {loc}
+                        </span>
+                        <button 
+                          type="button" 
+                          onClick={() => handleSetCurrentLocationToStation(loc)}
+                          style={{ fontSize: '0.65rem', padding: '2px 8px', background: 'rgba(59, 130, 246, 0.15)', color: '#3b82f6', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
+                        >
+                          🎯 Set Ke GPS Saya Saat Ini
+                        </button>
                       </div>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px' }}>
                         <div style={{ minWidth: 0 }}>
@@ -4042,6 +4918,159 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
               </div>
             </div>
 
+            {/* Download Data per Periode Waktu */}
+            <div className="glass-card" style={{ borderColor: 'rgba(59, 130, 246, 0.3)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h3 className="section-title" style={{ color: 'var(--primary)', marginBottom: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Download size={18} /> Download / Ekspor Laporan per Periode
+                </h3>
+              </div>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0 }}>
+                Pilih jenis data, rentang periode waktu, dan format unduhan (CSV atau PDF). Cocok untuk backup berkala sebelum menghapus data.
+              </p>
+
+              {/* Pilihan Jenis Data */}
+              <div>
+                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>JENIS DATA</label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '6px' }}>
+                  {[
+                    { id: 'suhu', label: '🌡️ Laporan Suhu' },
+                    { id: 'absensi', label: '👤 Data Absensi' },
+                    { id: 'kegiatan', label: '📋 Data Kegiatan' },
+                    { id: 'handover', label: '🔄 Data Handover' },
+                    { id: 'audit', label: '📱 Audit & Titip Absen' }
+                  ].filter(t => currentUser?.role === 'KOPKAR' ? (t.id === 'absensi' || t.id === 'audit') : true).map(t => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setDownloadModalType(t.id)}
+                      className="btn btn-secondary"
+                      style={{
+                        padding: '8px 10px',
+                        fontSize: '0.75rem',
+                        borderRadius: '8px',
+                        fontWeight: '600',
+                        background: downloadModalType === t.id ? 'var(--primary)' : 'var(--bg-tertiary)',
+                        color: downloadModalType === t.id ? '#fff' : 'var(--text-primary)',
+                        borderColor: downloadModalType === t.id ? 'var(--primary)' : 'var(--card-border)'
+                      }}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Preset Periode */}
+              <div>
+                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>PERIODE WAKTU CEPAT</label>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {[
+                    { id: 'today', label: 'Hari Ini' },
+                    { id: '7days', label: '7 Hari Terakhir' },
+                    { id: 'this_month', label: 'Bulan Ini' },
+                    { id: 'all', label: 'Semua Waktu' }
+                  ].map(p => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => applyPeriodPreset(p.id, setDownloadModalStart, setDownloadModalEnd, setDownloadModalPreset)}
+                      className="btn btn-secondary"
+                      style={{
+                        padding: '5px 12px',
+                        fontSize: '0.7rem',
+                        borderRadius: '6px',
+                        background: downloadModalPreset === p.id ? 'rgba(59, 130, 246, 0.2)' : 'var(--bg-tertiary)',
+                        color: downloadModalPreset === p.id ? 'var(--primary)' : 'var(--text-secondary)',
+                        borderColor: downloadModalPreset === p.id ? 'var(--primary)' : 'var(--card-border)'
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Input Tanggal Kustom */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <div>
+                  <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Dari Tanggal</label>
+                  <input 
+                    type="date" 
+                    className="form-control" 
+                    style={{ padding: '6px 8px', fontSize: '0.75rem' }} 
+                    value={downloadModalStart} 
+                    onChange={(e) => { setDownloadModalStart(e.target.value); setDownloadModalPreset('custom'); }} 
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Sampai Tanggal</label>
+                  <input 
+                    type="date" 
+                    className="form-control" 
+                    style={{ padding: '6px 8px', fontSize: '0.75rem' }} 
+                    value={downloadModalEnd} 
+                    onChange={(e) => { setDownloadModalEnd(e.target.value); setDownloadModalPreset('custom'); }} 
+                  />
+                </div>
+              </div>
+
+              {/* Preview Count */}
+              {(() => {
+                let targetList = [];
+                if (downloadModalType === 'suhu') targetList = reports;
+                else if (downloadModalType === 'absensi') targetList = attendance;
+                else if (downloadModalType === 'kegiatan') targetList = activities;
+                else if (downloadModalType === 'handover') targetList = handovers;
+                else if (downloadModalType === 'audit') targetList = db.getMultiAccountAudit();
+
+                const count = targetList.filter(item => {
+                  const ts = item.timestamp || item.sentAt || item.lastActive || item.created_at;
+                  if (!ts) return true;
+                  const itemDate = new Date(ts);
+                  const afterStart = downloadModalStart ? itemDate >= new Date(downloadModalStart) : true;
+                  const beforeEnd = downloadModalEnd ? itemDate <= new Date(downloadModalEnd + 'T23:59:59') : true;
+                  return afterStart && beforeEnd;
+                }).length;
+
+                return (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', padding: '8px 12px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span>📊 Data ditemukan: <strong>{count}</strong> {downloadModalType === 'audit' ? 'perangkat' : 'baris'}</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      {downloadModalStart && downloadModalEnd ? `${downloadModalStart} s/d ${downloadModalEnd}` : (downloadModalStart ? `Sejak ${downloadModalStart}` : 'Semua Periode')}
+                    </span>
+                  </div>
+                );
+              })()}
+
+              {/* Action Buttons */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <button 
+                  className="btn btn-primary" 
+                  onClick={() => handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'excel')}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontSize: '0.85rem', padding: '11px', background: '#16a34a', borderColor: '#16a34a', fontWeight: 'bold' }}
+                >
+                  <Download size={16} /> 📊 Unduh Excel (.xlsx) - Tabel Rapi
+                </button>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                  <button 
+                    className="btn btn-secondary" 
+                    onClick={() => handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'pdf')}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.8rem', padding: '10px' }}
+                  >
+                    <Download size={15} /> Unduh PDF
+                  </button>
+                  <button 
+                    className="btn btn-secondary" 
+                    onClick={() => handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'csv')}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.8rem', padding: '10px' }}
+                  >
+                    <Download size={15} /> Unduh CSV
+                  </button>
+                </div>
+              </div>
+            </div>
+
             {/* Danger Zones */}
             <div className="glass-card" style={{ borderColor: 'rgba(239, 68, 68, 0.25)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <h3 className="section-title" style={{ color: 'var(--danger)', marginBottom: 0 }}>
@@ -4056,23 +5085,39 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
               <button className="btn btn-secondary" onClick={handleResetAttendance} style={{ width: '100%', borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.05)' }}>
                 <Trash2 size={16} /> Hapus Semua Data Absensi
               </button>
-              <button className="btn btn-secondary" onClick={async () => {
-                if (window.confirm("PERINGATAN! Semua gambar/foto yang tersimpan di Cloud dan perangkat akan DIHAPUS PERMANEN untuk menghemat ruang penyimpanan. Data teks (nama, waktu, lokasi) tetap aman. Lanjutkan?")) {
-                  showToast("Sedang menghapus gambar... Harap tunggu.", "success");
-                  try {
-                    const result = await db.stripAllCloudImages();
-                    if (result.success) {
-                      setReports(db.getReports());
-                      setAttendance(db.getAttendance());
-                      setActivities(db.getActivities());
-                      showToast(`Berhasil menghapus ${result.total} gambar dari Cloud & perangkat!`, "success");
-                    } else {
-                      showToast(result.message || "Gagal menghapus gambar.", "error");
+              <button className="btn btn-secondary" onClick={handleResetActivities} style={{ width: '100%', borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.05)' }}>
+                <Trash2 size={16} /> Hapus Semua Data Kegiatan
+              </button>
+              <button className="btn btn-secondary" onClick={handleResetHandovers} style={{ width: '100%', borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.05)' }}>
+                <Trash2 size={16} /> Hapus Semua Data Handover (Serah Terima)
+              </button>
+              <button className="btn btn-secondary" onClick={handleClearDeviceAudit} style={{ width: '100%', borderColor: 'rgba(239, 68, 68, 0.4)', color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.05)' }}>
+                <Trash2 size={16} /> Hapus Histori Audit Perangkat & Deteksi Titip Absen
+              </button>
+              <button className="btn btn-secondary" onClick={() => {
+                openConfirmModal({
+                  title: "Hapus Semua Gambar (Hemat Egress/Memori)",
+                  message: "PERINGATAN! Semua gambar dan foto yang tersimpan di Supabase Cloud dan memori lokal akan DIHAPUS PERMANEN untuk menghemat ruang dan kuota egress. Data teks (nama, waktu, lokasi, suhu) tetap aman.",
+                  confirmText: "Ya, Hapus Semua Gambar",
+                  cancelText: "Batal",
+                  isDanger: true,
+                  onConfirm: async () => {
+                    showToast("Sedang menghapus gambar... Harap tunggu.", "info");
+                    try {
+                      const result = await db.stripAllCloudImages();
+                      if (result.success) {
+                        setReports(db.getReports());
+                        setAttendance(db.getAttendance());
+                        setActivities(db.getActivities());
+                        showToast(`Berhasil menghapus ${result.total} gambar dari Cloud & perangkat!`, "success");
+                      } else {
+                        showToast(result.message || "Gagal menghapus gambar.", "error");
+                      }
+                    } catch (e) {
+                      showToast("Gagal menghapus gambar: " + e.message, "error");
                     }
-                  } catch (e) {
-                    showToast("Gagal menghapus gambar: " + e.message, "error");
                   }
-                }
+                });
               }} style={{ width: '100%', borderColor: 'rgba(251, 146, 60, 0.4)', color: '#fb923c', background: 'rgba(251, 146, 60, 0.05)' }}>
                 <Trash2 size={16} /> Hapus Semua Gambar (Hemat Memori)
               </button>
@@ -4080,6 +5125,178 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
           </div>
         )}
       </main>
+
+      {/* ----------------- PERIOD DOWNLOAD MODAL ----------------- */}
+      {showPeriodDownloadModal && (
+        <div className="modal-overlay" onClick={() => setShowPeriodDownloadModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '460px' }}>
+            <div className="modal-header">
+              <div>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Download size={20} style={{ color: 'var(--primary)' }} />
+                  Download Laporan per Periode
+                </h3>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Unduh data dalam format Excel (.xlsx), PDF, atau CSV sesuai rentang waktu</span>
+              </div>
+              <button className="modal-close" onClick={() => setShowPeriodDownloadModal(false)}>
+                <X size={16} />
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '10px' }}>
+              {/* Pilihan Jenis Data */}
+              <div>
+                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '6px', display: 'block' }}>PILIH JENIS DATA</label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '6px' }}>
+                  {[
+                    { id: 'suhu', label: '🌡️ Laporan Suhu' },
+                    { id: 'absensi', label: '👤 Data Absensi' },
+                    { id: 'kegiatan', label: '📋 Data Kegiatan' },
+                    { id: 'handover', label: '🔄 Data Handover' },
+                    { id: 'audit', label: '📱 Audit & Titip Absen' }
+                  ].map(t => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setDownloadModalType(t.id)}
+                      className="btn btn-secondary"
+                      style={{
+                        padding: '8px 10px',
+                        fontSize: '0.75rem',
+                        borderRadius: '8px',
+                        fontWeight: '600',
+                        background: downloadModalType === t.id ? 'var(--primary)' : 'var(--bg-tertiary)',
+                        color: downloadModalType === t.id ? '#fff' : 'var(--text-primary)',
+                        borderColor: downloadModalType === t.id ? 'var(--primary)' : 'var(--card-border)'
+                      }}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Preset Periode */}
+              <div>
+                <label style={{ fontSize: '0.7rem', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '6px', display: 'block' }}>PERIODE WAKTU CEPAT</label>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {[
+                    { id: 'today', label: 'Hari Ini' },
+                    { id: '7days', label: '7 Hari Terakhir' },
+                    { id: 'this_month', label: 'Bulan Ini' },
+                    { id: 'all', label: 'Semua Waktu' }
+                  ].map(p => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => applyPeriodPreset(p.id, setDownloadModalStart, setDownloadModalEnd, setDownloadModalPreset)}
+                      className="btn btn-secondary"
+                      style={{
+                        padding: '5px 10px',
+                        fontSize: '0.7rem',
+                        borderRadius: '6px',
+                        background: downloadModalPreset === p.id ? 'rgba(59, 130, 246, 0.2)' : 'var(--bg-tertiary)',
+                        color: downloadModalPreset === p.id ? 'var(--primary)' : 'var(--text-secondary)',
+                        borderColor: downloadModalPreset === p.id ? 'var(--primary)' : 'var(--card-border)'
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Input Tanggal Kustom */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <div>
+                  <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Dari Tanggal</label>
+                  <input 
+                    type="date" 
+                    className="form-control" 
+                    style={{ padding: '6px 8px', fontSize: '0.75rem' }} 
+                    value={downloadModalStart} 
+                    onChange={(e) => { setDownloadModalStart(e.target.value); setDownloadModalPreset('custom'); }} 
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Sampai Tanggal</label>
+                  <input 
+                    type="date" 
+                    className="form-control" 
+                    style={{ padding: '6px 8px', fontSize: '0.75rem' }} 
+                    value={downloadModalEnd} 
+                    onChange={(e) => { setDownloadModalEnd(e.target.value); setDownloadModalPreset('custom'); }} 
+                  />
+                </div>
+              </div>
+
+              {/* Live Count Preview */}
+              {(() => {
+                let targetList = [];
+                if (downloadModalType === 'suhu') targetList = reports;
+                else if (downloadModalType === 'absensi') targetList = attendance;
+                else if (downloadModalType === 'kegiatan') targetList = activities;
+                else if (downloadModalType === 'handover') targetList = handovers;
+                else if (downloadModalType === 'audit') targetList = db.getMultiAccountAudit();
+
+                const count = targetList.filter(item => {
+                  const ts = item.timestamp || item.sentAt || item.lastActive || item.created_at;
+                  if (!ts) return true;
+                  const itemDate = new Date(ts);
+                  const afterStart = downloadModalStart ? itemDate >= new Date(downloadModalStart) : true;
+                  const beforeEnd = downloadModalEnd ? itemDate <= new Date(downloadModalEnd + 'T23:59:59') : true;
+                  return afterStart && beforeEnd;
+                }).length;
+
+                return (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', padding: '10px 12px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span>📊 Data ditemukan: <strong style={{ color: count > 0 ? 'var(--primary)' : 'var(--danger)' }}>{count}</strong> {downloadModalType === 'audit' ? 'perangkat' : 'baris'}</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      {downloadModalStart && downloadModalEnd ? `${downloadModalStart} s/d ${downloadModalEnd}` : (downloadModalStart ? `Sejak ${downloadModalStart}` : 'Semua Periode')}
+                    </span>
+                  </div>
+                );
+              })()}
+
+              {/* Tombol Unduh */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
+                <button 
+                  className="btn btn-primary" 
+                  onClick={() => {
+                    handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'excel');
+                    setShowPeriodDownloadModal(false);
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', fontSize: '0.85rem', padding: '11px', background: '#16a34a', borderColor: '#16a34a', fontWeight: 'bold' }}
+                >
+                  <Download size={16} /> 📊 Unduh Excel (.xlsx) - Tabel Rapi
+                </button>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                  <button 
+                    className="btn btn-secondary" 
+                    onClick={() => {
+                      handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'pdf');
+                      setShowPeriodDownloadModal(false);
+                    }}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.8rem', padding: '10px' }}
+                  >
+                    <Download size={15} /> Unduh PDF
+                  </button>
+                  <button 
+                    className="btn btn-secondary" 
+                    onClick={() => {
+                      handleDownloadDataset(downloadModalType, downloadModalStart, downloadModalEnd, 'csv');
+                      setShowPeriodDownloadModal(false);
+                    }}
+                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '0.8rem', padding: '10px' }}
+                  >
+                    <Download size={15} /> Unduh CSV
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ----------------- SUHU DETAIL MODAL ----------------- */}
       {selectedReport && (
@@ -4111,7 +5328,7 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
                 <div className="glass-card" style={{ padding: '12px', marginBottom: 0 }}>
                   <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '2px' }}>SUHU ALAT</span>
                   <span style={{ fontSize: '1.5rem', fontWeight: 'bold', fontFamily: 'var(--font-heading)', color: db.getTemperatureStatus(selectedReport.temperature, settings).color }}>
-                    {selectedReport.temperature.toFixed(1)}°C
+                    {(Number(selectedReport.temperature) || 0).toFixed(1)}°C
                   </span>
                 </div>
                 <div className="glass-card" style={{ padding: '12px', marginBottom: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
@@ -4853,6 +6070,73 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
                 Kirim Catatan Ke Piket
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- UNIVERSAL CONFIRMATION MODAL ----------------- */}
+      {confirmModal.isOpen && (
+        <div className="modal-overlay" style={{ zIndex: 100000 }} onClick={confirmModal.isLoading ? undefined : closeConfirmModal}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '420px', padding: '24px', textAlign: 'center' }}>
+            <div style={{
+              width: '56px',
+              height: '56px',
+              borderRadius: '50%',
+              background: confirmModal.isDanger ? 'rgba(239, 68, 68, 0.15)' : 'rgba(59, 130, 246, 0.15)',
+              color: confirmModal.isDanger ? 'var(--danger)' : 'var(--primary)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 16px auto'
+            }}>
+              {confirmModal.isDanger ? <AlertTriangle size={30} /> : <AlertCircle size={30} />}
+            </div>
+
+            <h3 style={{ fontSize: '1.15rem', fontWeight: '700', marginBottom: '10px', color: 'var(--text-primary)' }}>
+              {confirmModal.title}
+            </h3>
+
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: '1.5', marginBottom: '22px', whiteSpace: 'pre-line' }}>
+              {confirmModal.message}
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={closeConfirmModal}
+                disabled={confirmModal.isLoading}
+                style={{ padding: '10px' }}
+              >
+                {confirmModal.cancelText || 'Batal'}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={executeConfirmAction}
+                disabled={confirmModal.isLoading}
+                style={{
+                  padding: '10px',
+                  background: confirmModal.isDanger ? 'var(--danger)' : 'var(--primary)',
+                  color: '#fff',
+                  border: 'none',
+                  fontWeight: '600',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px'
+                }}
+              >
+                {confirmModal.isLoading ? (
+                  <>
+                    <RefreshCw size={16} className="spin" />
+                    <span>Memproses...</span>
+                  </>
+                ) : (
+                  confirmModal.confirmText || 'Ya, Lanjutkan'
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}
