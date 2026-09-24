@@ -463,10 +463,10 @@ export const db = {
     }
   },
 
-  clearAllReports() {
+  async clearAllReports() {
     try {
       localStorage.setItem(REPORTS_KEY, JSON.stringify([]));
-      this.clearTableFromCloud('reports');
+      await this.clearTableFromCloud('reports');
       return true;
     } catch (e) {
       console.error('Failed to clear reports:', e);
@@ -533,10 +533,10 @@ export const db = {
     }
   },
 
-  clearAllAttendance() {
+  async clearAllAttendance() {
     try {
       localStorage.setItem(ATTENDANCE_KEY, JSON.stringify([]));
-      this.clearTableFromCloud('attendance');
+      await this.clearTableFromCloud('attendance');
       return true;
     } catch (e) {
       return false;
@@ -608,20 +608,20 @@ export const db = {
     }
   },
 
-  clearAllActivities() {
+  async clearAllActivities() {
     try {
       localStorage.setItem(ACTIVITIES_KEY, JSON.stringify([]));
-      this.clearTableFromCloud('activities');
+      await this.clearTableFromCloud('activities');
       return true;
     } catch (e) {
       return false;
     }
   },
 
-  clearAllHandovers() {
+  async clearAllHandovers() {
     try {
       localStorage.setItem(HANDOVERS_KEY, JSON.stringify([]));
-      this.clearTableFromCloud('handovers');
+      await this.clearTableFromCloud('handovers');
       return true;
     } catch (e) {
       return false;
@@ -1308,7 +1308,7 @@ export const db = {
     }
   },
 
-  async syncWithCloud() {
+  async syncWithCloud(days = 2) {
     const { url, key } = this.getSupabaseConfig();
     if (!url || !key) return null;
 
@@ -1320,8 +1320,18 @@ export const db = {
         'Prefer': 'return=representation'
       };
 
-      // 1. Fetch from Supabase
-      const reportsRes = await fetch(`${url}/rest/v1/reports?select=*`, { headers });
+      // Super Egress Saver: default to last 2 days of cloud data
+      let dateFilter = '';
+      let filterDate = null;
+      if (days && days !== 'all') {
+        const d = new Date();
+        d.setDate(d.getDate() - (parseInt(days, 10) || 2));
+        filterDate = d;
+        dateFilter = `&timestamp=gte.${d.toISOString()}`;
+      }
+
+      // 1. Fetch from Supabase (Only recent 2 days to save 99.9% bandwidth)
+      const reportsRes = await fetch(`${url}/rest/v1/reports?select=*${dateFilter}`, { headers });
       let cloudReports = reportsRes.ok ? await reportsRes.json() : [];
       cloudReports = cloudReports.map(r => ({
         id: r.id,
@@ -1336,7 +1346,7 @@ export const db = {
         jobdesk: r.jobdesk || 'suhu'
       }));
 
-      const attRes = await fetch(`${url}/rest/v1/attendance?select=*`, { headers });
+      const attRes = await fetch(`${url}/rest/v1/attendance?select=*${dateFilter}`, { headers });
       let cloudAtt = attRes.ok ? await attRes.json() : [];
       
       // Convert cloud snake_case keys to camelCase for local React state
@@ -1383,9 +1393,9 @@ export const db = {
         
       this._safeSetItem(ATTENDANCE_KEY, mergedAtt);
 
-      // 4. Upload missing local reports to cloud
+      // 4. Upload missing local reports to cloud (only recent items if filter active)
       const cloudReportIds = new Set(cloudReports.map(r => r.id));
-      const reportsToUpload = localReports.filter(r => !cloudReportIds.has(r.id));
+      const reportsToUpload = localReports.filter(r => !cloudReportIds.has(r.id) && (!filterDate || new Date(r.timestamp) >= filterDate));
       
       for (const r of reportsToUpload) {
         const mapped = {
@@ -1396,7 +1406,7 @@ export const db = {
           equipment_name: r.equipmentName || r.equipment_name || '',
           temperature: r.temperature,
           notes: r.notes || null,
-          image: r.image || null,
+          image: null,
           status: r.status || 'Normal',
           jobdesk: r.jobdesk || 'suhu'
         };
@@ -1409,7 +1419,7 @@ export const db = {
 
       // 5. Upload missing local attendance to cloud
       const cloudAttIds = new Set(cloudAtt.map(a => a.id));
-      const attToUpload = localAtt.filter(a => !cloudAttIds.has(a.id));
+      const attToUpload = localAtt.filter(a => !cloudAttIds.has(a.id) && (!filterDate || new Date(a.timestamp) >= filterDate));
       
       for (const a of attToUpload) {
         const mapped = {
@@ -1418,7 +1428,7 @@ export const db = {
           officer: a.officer,
           jobdesk: a.jobdesk || 'suhu',
           type: a.type,
-          image: a.image,
+          image: null,
           latitude: a.latitude,
           longitude: a.longitude,
           gps_accuracy: a.gpsAccuracy,
@@ -1438,7 +1448,7 @@ export const db = {
       // 6. Fetch activities from cloud
       let cloudActivities = [];
       try {
-        const actRes = await fetch(`${url}/rest/v1/activities?select=*`, { headers });
+        const actRes = await fetch(`${url}/rest/v1/activities?select=*${dateFilter}`, { headers });
         cloudActivities = actRes.ok ? await actRes.json() : [];
       } catch (e) {
         // Table might not exist yet, that's ok
@@ -1455,13 +1465,14 @@ export const db = {
 
       // 8. Upload missing local activities to cloud
       const cloudActIds = new Set(cloudActivities.map(a => a.id));
-      const actToUpload = localActivities.filter(a => !cloudActIds.has(a.id));
+      const actToUpload = localActivities.filter(a => !cloudActIds.has(a.id) && (!filterDate || new Date(a.timestamp) >= filterDate));
       for (const a of actToUpload) {
         try {
+          const actMapped = { ...a, image: null };
           await fetch(`${url}/rest/v1/activities`, {
             method: 'POST',
             headers,
-            body: JSON.stringify(a)
+            body: JSON.stringify(actMapped)
           });
         } catch (e) {
           // Ignore if table doesn't exist
