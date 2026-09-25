@@ -99,7 +99,8 @@ const DEFAULT_STATION_COORDS = {
   'Pintu keluar masuk T45': { lat: -4.7895993, lon: 119.6123325, radius: 100 },
   'pintu keluar masuk T23': { lat: -4.783923, lon: 119.614793, radius: 100 },
   'LBS/Dome T4': { lat: -4.7889544, lon: 119.6153925, radius: 1000 },
-  'LBS/Dome T5': { lat: -4.7902978, lon: 119.6163844, radius: 100 },
+  'LBS/Dome T5': { lat: -4.7902978, lon: 119.6163844, radius: 1000 },
+  'LBS/Dome': { lat: -4.7889544, lon: 119.6153925, radius: 1000 },
   'Gudang Buffer': { lat: -4.7864097, lon: 119.6194399, radius: 1000 },
   'Dome T4': { lat: -4.786256, lon: 119.614108, radius: 100 },
   'Dome T5': { lat: -4.786256, lon: 119.614108, radius: 100 },
@@ -1453,17 +1454,20 @@ export const db = {
 
   // --- CLOUD SYNC CONFIG (SUPABASE) ---
   getSupabaseConfig() {
-    const DEFAULT_URL = 'https://xevvfgbzmybyehlaiisx.supabase.co';
-    const DEFAULT_KEY = 'sb_publishable_nhgq0NRhvniCXK5ETG22-w_OspHUO2q';
+    const DEFAULT_URL = 'https://nenkqvmeyuwaqsnlrorl.supabase.co';
+    const DEFAULT_KEY = 'sb_publishable_Vs6arpR7zPtsxa2DxWWMbg_MAOHwW46';
 
     let storedUrl = localStorage.getItem('thermascan_supabase_url');
     let storedKey = localStorage.getItem('thermascan_supabase_key');
 
-    if (!storedUrl || !storedUrl.includes('xevvfgbzmybyehlaiisx')) {
+    // Automatically migrate users from old database or invalid state
+    if (!storedUrl || !storedUrl.startsWith('http') || storedUrl.includes('xevvfgbzmybyehlaiisx')) {
       storedUrl = DEFAULT_URL;
       localStorage.setItem('thermascan_supabase_url', DEFAULT_URL);
+      localStorage.setItem('thermascan_supabase_key', DEFAULT_KEY);
+      storedKey = DEFAULT_KEY;
     }
-    if (!storedKey || storedKey.length < 20) {
+    if (!storedKey || storedKey.length < 20 || storedKey.includes('nhgq0NRhvniCXK5ETG22-w_OspHUO2q')) {
       storedKey = DEFAULT_KEY;
       localStorage.setItem('thermascan_supabase_key', DEFAULT_KEY);
     }
