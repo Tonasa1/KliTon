@@ -1,7 +1,26 @@
 // Local Database utilities for ThermaScan using localStorage
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
-import * as XLSX from 'xlsx';
+// Dynamic SheetJS loader to guarantee 100% build compatibility on Vercel without requiring extra npm packages
+const getXLSX = () => {
+  if (typeof window !== 'undefined' && window.XLSX) return Promise.resolve(window.XLSX);
+  if (typeof document !== 'undefined') {
+    return new Promise((resolve) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+      script.onload = () => resolve(window.XLSX || null);
+      script.onerror = () => resolve(null);
+      document.head.appendChild(script);
+    });
+  }
+  return Promise.resolve(null);
+};
+
+// Pre-load SheetJS in background
+if (typeof document !== 'undefined') {
+  getXLSX().catch(() => {});
+}
+
 const REPORTS_KEY = 'thermascan_reports';
 const LOCATIONS_KEY = 'thermascan_locations';
 const SETTINGS_KEY = 'thermascan_settings';
@@ -2043,6 +2062,11 @@ export const db = {
 
   downloadExcel(headers, rows, sheetName = 'Data', fileNamePrefix = 'Export') {
     try {
+      const XLSX = (typeof window !== 'undefined' && window.XLSX) ? window.XLSX : null;
+      if (!XLSX) {
+        const csvContent = [headers.join(','), ...rows.map(r => r.map(c => `"${String(c || '').replace(/"/g, '""')}"`).join(','))].join('\r\n');
+        return this.downloadFile(csvContent, fileNamePrefix);
+      }
       const data = [headers, ...rows];
       const ws = XLSX.utils.aoa_to_sheet(data);
 
