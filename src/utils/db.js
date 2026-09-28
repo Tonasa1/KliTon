@@ -68,59 +68,26 @@ const DEFAULT_USERS = [
 ];
 
 const DEFAULT_LOCATIONS = [
-  'Pintu Keluar T4',
-  'Pintu Keluar T5',
-  'Pintu keluar masuk T45',
-  'pintu keluar masuk T23',
-  'LBS/Dome T4',
-  'LBS/Dome T5',
   'Gudang Buffer',
-  'Dome T4',
-  'Dome T5',
-  'Gudang BKS',
-  'Hopper',
   'Hopper BKS',
+  'Gudang BKS',
+  'LBS/Dome T4',
   'Gedung QA',
   'OGS',
-  'Area Produksi',
-  'Gudang Bahan Baku',
-  'Ruang Kontrol',
-  'Area Conveyor',
-  'Laboratorium Utama',
-  'Lab Kimia',
-  'Lab Fisika',
-  'Area Sampling',
-  'Lainnya...'
+  'Pintu keluar masuk T45',
+  'pintu keluar masuk T23'
 ];
 
-// Koordinat GPS per stasiun kerja (Opsi B - geofence per lokasi)
+// Koordinat GPS resmi 8 stasiun kerja (Universal - semua jobdesk)
 const DEFAULT_STATION_COORDS = {
-  // === SUHU stations ===
-  'Pintu keluar masuk T45': { lat: -4.7895993, lon: 119.6123325, radius: 100 },
-  'pintu keluar masuk T23': { lat: -4.783923, lon: 119.614793, radius: 100 },
-  'LBS/Dome T4': { lat: -4.7889544, lon: 119.6153925, radius: 1000 },
-  'LBS/Dome T5': { lat: -4.7902978, lon: 119.6163844, radius: 1000 },
-  'LBS/Dome': { lat: -4.7889544, lon: 119.6153925, radius: 1000 },
-  'Gudang Buffer': { lat: -4.7864097, lon: 119.6194399, radius: 1000 },
-  'Dome T4': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Dome T5': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Pintu Keluar T4': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Pintu Keluar T5': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Gudang BKS': { lat: -4.816485, lon: 119.502, radius: 1000 },
-  'Hopper': { lat: -4.81749419956391, lon: 119.48346663528389, radius: 1000 },
+  'Gudang Buffer': { lat: -4.786410, lon: 119.619440, radius: 1000 },
   'Hopper BKS': { lat: -4.817542, lon: 119.483413, radius: 1000 },
+  'Gudang BKS': { lat: -4.816485, lon: 119.502000, radius: 1000 },
+  'LBS/Dome T4': { lat: -4.788954, lon: 119.615393, radius: 1000 },
   'Gedung QA': { lat: -4.786468, lon: 119.614094, radius: 100 },
-  'OGS': { lat: -4.7878353, lon: 119.6134088, radius: 100 },
-  // === INSPEKSI stations ===
-  'Area Produksi': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Gudang Bahan Baku': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Ruang Kontrol': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Area Conveyor': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  // === ANALIS stations ===
-  'Laboratorium Utama': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Lab Kimia': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Lab Fisika': { lat: -4.786256, lon: 119.614108, radius: 100 },
-  'Area Sampling': { lat: -4.786256, lon: 119.614108, radius: 100 },
+  'OGS': { lat: -4.787835, lon: 119.613409, radius: 100 },
+  'Pintu keluar masuk T45': { lat: -4.789599, lon: 119.612333, radius: 100 },
+  'pintu keluar masuk T23': { lat: -4.783923, lon: 119.614793, radius: 100 }
 };
 
 const DEFAULT_SETTINGS = {
@@ -837,7 +804,22 @@ export const db = {
   getLocations() {
     try {
       const data = localStorage.getItem(LOCATIONS_KEY);
-      return data ? JSON.parse(data) : DEFAULT_LOCATIONS;
+      if (!data) {
+        localStorage.setItem(LOCATIONS_KEY, JSON.stringify(DEFAULT_LOCATIONS));
+        return DEFAULT_LOCATIONS;
+      }
+      const parsed = JSON.parse(data);
+      if (!Array.isArray(parsed)) return DEFAULT_LOCATIONS;
+      // Filter out any obsolete locations not in DEFAULT_LOCATIONS
+      const valid = parsed.filter(l => DEFAULT_LOCATIONS.includes(l));
+      DEFAULT_LOCATIONS.forEach(dl => {
+        if (!valid.includes(dl)) valid.push(dl);
+      });
+      const sorted = DEFAULT_LOCATIONS.filter(l => valid.includes(l));
+      if (valid.length !== parsed.length) {
+        localStorage.setItem(LOCATIONS_KEY, JSON.stringify(sorted));
+      }
+      return sorted;
     } catch (e) {
       return DEFAULT_LOCATIONS;
     }
@@ -873,6 +855,7 @@ export const db = {
 
   // --- LOCATIONS PER JOBDESK ---
   getLocationsByJobdesk(jobdesk) {
+    // 8 Stasiun kerja universal untuk semua jobdesk
     return this.getLocations();
   },
 
@@ -889,16 +872,17 @@ export const db = {
     try {
       const data = localStorage.getItem(STATION_COORDS_KEY);
       const parsed = data ? JSON.parse(data) : {};
-      const merged = { ...DEFAULT_STATION_COORDS, ...parsed };
-      // Enforce minimum radius of 100m for all stations (User request: radius min 100m)
-      Object.keys(merged).forEach(st => {
-        if (merged[st]) {
-          if (!merged[st].radius || merged[st].radius < 100) {
-            merged[st].radius = 100;
-          }
-        }
+      const officialKeys = Object.keys(DEFAULT_STATION_COORDS);
+      const result = {};
+      officialKeys.forEach(st => {
+        const p = parsed[st] || {};
+        result[st] = {
+          lat: (p.lat !== undefined && !isNaN(p.lat)) ? parseFloat(p.lat) : DEFAULT_STATION_COORDS[st].lat,
+          lon: (p.lon !== undefined && !isNaN(p.lon)) ? parseFloat(p.lon) : DEFAULT_STATION_COORDS[st].lon,
+          radius: (p.radius !== undefined && !isNaN(p.radius)) ? Math.max(100, parseInt(p.radius, 10)) : DEFAULT_STATION_COORDS[st].radius
+        };
       });
-      return merged;
+      return result;
     } catch (e) {
       return DEFAULT_STATION_COORDS;
     }
@@ -2259,17 +2243,23 @@ export const db = {
       if (data && data.length > 0 && data[0].data) {
         const cloudData = data[0].data;
         if (cloudData.locations && Array.isArray(cloudData.locations)) {
-          localStorage.setItem(LOCATIONS_KEY, JSON.stringify(cloudData.locations));
+          const validLocs = cloudData.locations.filter(l => DEFAULT_LOCATIONS.includes(l));
+          DEFAULT_LOCATIONS.forEach(dl => { if (!validLocs.includes(dl)) validLocs.push(dl); });
+          const sortedLocs = DEFAULT_LOCATIONS.filter(l => validLocs.includes(l));
+          localStorage.setItem(LOCATIONS_KEY, JSON.stringify(sortedLocs));
         }
         if (cloudData.stationCoords && typeof cloudData.stationCoords === 'object') {
-          const _mergedCoords = { ...DEFAULT_STATION_COORDS, ...cloudData.stationCoords };
-          // Enforce minimum radius of 100m
-          Object.keys(_mergedCoords).forEach(st => {
-            if (_mergedCoords[st] && (!_mergedCoords[st].radius || _mergedCoords[st].radius < 100)) {
-              _mergedCoords[st].radius = 100;
-            }
+          const officialKeys = Object.keys(DEFAULT_STATION_COORDS);
+          const sanitizedCoords = {};
+          officialKeys.forEach(st => {
+            const c = cloudData.stationCoords[st] || DEFAULT_STATION_COORDS[st];
+            sanitizedCoords[st] = {
+              lat: (c && c.lat !== undefined && !isNaN(c.lat)) ? parseFloat(c.lat) : DEFAULT_STATION_COORDS[st].lat,
+              lon: (c && c.lon !== undefined && !isNaN(c.lon)) ? parseFloat(c.lon) : DEFAULT_STATION_COORDS[st].lon,
+              radius: (c && c.radius !== undefined && !isNaN(c.radius)) ? Math.max(100, parseInt(c.radius, 10)) : DEFAULT_STATION_COORDS[st].radius
+            };
           });
-          localStorage.setItem(STATION_COORDS_KEY, JSON.stringify(_mergedCoords));
+          localStorage.setItem(STATION_COORDS_KEY, JSON.stringify(sanitizedCoords));
         }
         if (cloudData.settings && typeof cloudData.settings === 'object') {
           const _mergedSettings = { ...DEFAULT_SETTINGS, ...cloudData.settings };
