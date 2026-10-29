@@ -1503,6 +1503,28 @@ export const db = {
     }
   },
 
+  async _fetchAllSupabase(endpoint, headers, batchSize = 1000) {
+    let allRows = [];
+    let offset = 0;
+    while (true) {
+      const sep = endpoint.includes('?') ? '&' : '?';
+      const pageUrl = `${endpoint}${sep}limit=${batchSize}&offset=${offset}`;
+      try {
+        const res = await fetch(pageUrl, { headers });
+        if (!res.ok) break;
+        const chunk = await res.json();
+        if (!Array.isArray(chunk) || chunk.length === 0) break;
+        allRows.push(...chunk);
+        if (chunk.length < batchSize) break;
+        offset += batchSize;
+      } catch (err) {
+        console.warn('Pagination fetch interrupted:', err);
+        break;
+      }
+    }
+    return allRows;
+  },
+
   async syncWithCloud(days = 2) {
     const { url, key } = this.getSupabaseConfig();
     if (!url || !key) return null;
@@ -1515,7 +1537,7 @@ export const db = {
         'Prefer': 'return=representation'
       };
 
-      // Super Egress Saver: default to last 2 days of cloud data
+      // Super Egress & Memory Saver: default to last 2 days of cloud data for daily operations
       let dateFilter = '';
       let filterDate = null;
       if (days && days !== 'all') {
@@ -1525,9 +1547,8 @@ export const db = {
         dateFilter = `&timestamp=gte.${d.toISOString()}`;
       }
 
-      // 1. Fetch from Supabase (Omit heavy base64 image column to save 99.9% bandwidth/egress and avoid localStorage quota limit)
-      const reportsRes = await fetch(`${url}/rest/v1/reports?select=id,timestamp,officer,location,equipment_name,temperature,notes,status,jobdesk${dateFilter}`, { headers });
-      let cloudReports = reportsRes.ok ? await reportsRes.json() : [];
+      // 1. Fetch from Supabase (Omit heavy base64 image column to save bandwidth and avoid localStorage quota limit)
+      let cloudReports = await this._fetchAllSupabase(`${url}/rest/v1/reports?select=id,timestamp,officer,location,equipment_name,temperature,notes,status,jobdesk${dateFilter}&order=timestamp.desc`, headers);
       cloudReports = cloudReports.map(r => ({
         id: r.id,
         timestamp: r.timestamp,
@@ -1541,8 +1562,7 @@ export const db = {
         jobdesk: r.jobdesk || 'suhu'
       }));
 
-      const attRes = await fetch(`${url}/rest/v1/attendance?select=id,timestamp,officer,jobdesk,type,image,latitude,longitude,gps_accuracy,is_fake_gps,notes,status,spv_approval,manager_approval${dateFilter}`, { headers });
-      let cloudAtt = attRes.ok ? await attRes.json() : [];
+      let cloudAtt = await this._fetchAllSupabase(`${url}/rest/v1/attendance?select=id,timestamp,officer,jobdesk,type,image,latitude,longitude,gps_accuracy,is_fake_gps,notes,status,spv_approval,manager_approval${dateFilter}&order=timestamp.desc`, headers);
       
       // Convert cloud snake_case keys to camelCase for local React state
       cloudAtt = cloudAtt.map(a => ({
@@ -1554,12 +1574,12 @@ export const db = {
         image: a.image || '',
         latitude: a.latitude,
         longitude: a.longitude,
-        gpsAccuracy: a.gps_accuracy,
-        isFakeGps: a.is_fake_gps,
+        gpsAccuracy: a.gps_accuracy !== undefined ? a.gps_accuracy : a.gpsAccuracy,
+        isFakeGps: a.is_fake_gps !== undefined ? a.is_fake_gps : a.isFakeGps,
         notes: a.notes,
         status: a.status || 'Disetujui',
-        spvApproval: a.spv_approval,
-        managerApproval: a.manager_approval
+        spvApproval: a.spv_approval !== undefined ? a.spv_approval : a.spvApproval,
+        managerApproval: a.manager_approval !== undefined ? a.manager_approval : a.managerApproval
       }));
 
       // Active Reset Markers & Tombstones
@@ -1662,8 +1682,7 @@ export const db = {
       // 6. Fetch activities from cloud
       let cloudActivities = [];
       try {
-        const actRes = await fetch(`${url}/rest/v1/activities?select=*${dateFilter}`, { headers });
-        cloudActivities = actRes.ok ? await actRes.json() : [];
+        cloudActivities = await this._fetchAllSupabase(`${url}/rest/v1/activities?select=*${dateFilter}&order=timestamp.desc`, headers);
       } catch (e) {
         // Table might not exist yet, that's ok
       }
@@ -2057,6 +2076,230 @@ export const db = {
     } catch (e) {
       console.error("Failed to fetch handovers from cloud:", e);
       return [];
+    }
+  },
+
+  async fetchDatasetForPeriod(type, startDate, endDate) {
+    if (type === 'audit') {
+      const auditList = typeof this.getMultiAccountAudit === 'function' ? this.getMultiAccountAudit() : [];
+      return auditList.filter(item => {
+        const ts = item.lastActive || item.timestamp;
+        if (!ts) return true;
+        const itemDate = new Date(ts);
+        const afterStart = startDate ? itemDate >= new Date(startDate) : true;
+        const beforeEnd = endDate ? itemDate <= new Date(endDate + 'T23:59:59.999') : true;
+        return afterStart && beforeEnd;
+      });
+    }
+
+    const { url, key } = this.getSupabaseConfig();
+    let cloudRows = [];
+    const deletedIds = new Set(this.getDeletedIds());
+
+    if (url && key) {
+      try {
+        const headers = {
+          'apikey': key,
+          'Authorization': `Bearer ${key}`,
+          'Content-Type': 'application/json'
+        };
+
+        let table = 'reports';
+        let selectCols = 'id,timestamp,officer,location,equipment_name,temperature,notes,status,jobdesk';
+        let dateCol = 'timestamp';
+
+        if (type === 'absensi' || type === 'attendance') {
+          table = 'attendance';
+          selectCols = 'id,timestamp,officer,jobdesk,type,image,latitude,longitude,gps_accuracy,is_fake_gps,notes,status,spv_approval,manager_approval';
+          dateCol = 'timestamp';
+        } else if (type === 'kegiatan' || type === 'activities') {
+          table = 'activities';
+          selectCols = '*';
+          dateCol = 'timestamp';
+        } else if (type === 'handover' || type === 'handovers') {
+          table = 'handovers';
+          selectCols = '*';
+          dateCol = 'sent_at';
+        }
+
+        let dateFilter = '';
+        if (startDate) {
+          const s = new Date(startDate.includes('T') ? startDate : `${startDate}T00:00:00`);
+          dateFilter += `&${dateCol}=gte.${s.toISOString()}`;
+        }
+        if (endDate) {
+          const e = new Date(endDate.includes('T') ? endDate : `${endDate}T23:59:59.999`);
+          dateFilter += `&${dateCol}=lte.${e.toISOString()}`;
+        }
+
+        const rawCloud = await this._fetchAllSupabase(`${url}/rest/v1/${table}?select=${selectCols}${dateFilter}&order=${dateCol}.desc`, headers);
+
+        // Map column names based on dataset type
+        if (type === 'suhu' || type === 'reports') {
+          cloudRows = rawCloud.map(r => ({
+            id: r.id,
+            timestamp: r.timestamp,
+            officer: r.officer,
+            location: r.location,
+            equipmentName: r.equipment_name || r.equipmentName || '',
+            temperature: r.temperature,
+            notes: r.notes || '',
+            image: '',
+            status: r.status || 'Normal',
+            jobdesk: r.jobdesk || 'suhu'
+          }));
+        } else if (type === 'absensi' || type === 'attendance') {
+          cloudRows = rawCloud.map(a => ({
+            id: a.id,
+            timestamp: a.timestamp,
+            officer: a.officer,
+            jobdesk: a.jobdesk || 'suhu',
+            type: a.type,
+            image: a.image || '',
+            latitude: a.latitude,
+            longitude: a.longitude,
+            gpsAccuracy: a.gps_accuracy !== undefined ? a.gps_accuracy : a.gpsAccuracy,
+            isFakeGps: a.is_fake_gps !== undefined ? a.is_fake_gps : a.isFakeGps,
+            notes: a.notes,
+            status: a.status || 'Disetujui',
+            spvApproval: a.spv_approval !== undefined ? a.spv_approval : a.spvApproval,
+            managerApproval: a.manager_approval !== undefined ? a.manager_approval : a.managerApproval
+          }));
+        } else if (type === 'handover' || type === 'handovers') {
+          cloudRows = rawCloud.map(h => ({
+            id: h.id,
+            type: h.type,
+            jobdesk: h.jobdesk,
+            shiftFrom: h.shift_from || h.shiftFrom,
+            shiftTo: h.shift_to || h.shiftTo,
+            senderName: h.sender_name || h.senderName,
+            senderStation: h.sender_station || h.senderStation,
+            senderLat: h.sender_lat || h.senderLat,
+            senderLon: h.sender_lon || h.senderLon,
+            sentAt: h.sent_at || h.sentAt,
+            summary: h.summary,
+            issues: h.issues,
+            notes: h.notes,
+            receiverName: h.receiver_name || h.receiverName,
+            receiverStation: h.receiver_station || h.receiverStation,
+            receiverLat: h.receiver_lat || h.receiverLat,
+            receiverLon: h.receiver_lon || h.receiverLon,
+            receivedAt: h.received_at || h.receivedAt,
+            piketDate: h.piket_date || h.piketDate,
+            piketChecklist: h.piket_checklist ? (typeof h.piket_checklist === 'string' ? JSON.parse(h.piket_checklist) : h.piket_checklist) : (h.piketChecklist || null),
+            senderFrom: h.sender_from || h.senderFrom,
+            status: h.status,
+            notifiedSpv: h.notified_spv !== undefined ? h.notified_spv : h.notifiedSpv,
+            notifiedManager: h.notified_manager !== undefined ? h.notified_manager : h.notifiedManager
+          }));
+        } else {
+          cloudRows = rawCloud;
+        }
+      } catch (err) {
+        console.warn("fetchDatasetForPeriod cloud fetch error, falling back to local:", err);
+      }
+    }
+
+    // Filter cloud items by deletedIds and reset markers
+    cloudRows = cloudRows.filter(r => !deletedIds.has(r.id));
+    if (type === 'absensi' || type === 'attendance') {
+      const attResetStr = localStorage.getItem(ATTENDANCE_RESET_KEY);
+      const attResetTime = attResetStr ? new Date(attResetStr).getTime() : 0;
+      if (attResetTime) cloudRows = cloudRows.filter(r => new Date(r.timestamp).getTime() > attResetTime);
+    } else if (type === 'suhu' || type === 'reports') {
+      const repResetStr = localStorage.getItem(REPORTS_RESET_KEY);
+      const repResetTime = repResetStr ? new Date(repResetStr).getTime() : 0;
+      if (repResetTime) cloudRows = cloudRows.filter(r => new Date(r.timestamp).getTime() > repResetTime);
+    }
+
+    // Merge with local items (to capture any offline or newly added local data)
+    let localItems = [];
+    if (type === 'suhu' || type === 'reports') localItems = this.getReports();
+    else if (type === 'absensi' || type === 'attendance') localItems = this.getAttendance();
+    else if (type === 'kegiatan' || type === 'activities') localItems = this.getActivities();
+    else if (type === 'handover' || type === 'handovers') localItems = this.getHandovers();
+
+    const mergedMap = new Map();
+    cloudRows.forEach(r => mergedMap.set(r.id, r));
+    localItems.forEach(item => {
+      if (!deletedIds.has(item.id)) {
+        const ts = item.timestamp || item.sentAt || item.sent_at;
+        if (ts) {
+          const itemDate = new Date(ts);
+          const afterStart = startDate ? itemDate >= new Date(startDate) : true;
+          const beforeEnd = endDate ? itemDate <= new Date(endDate + 'T23:59:59.999') : true;
+          if (afterStart && beforeEnd) {
+            mergedMap.set(item.id, item);
+          }
+        } else {
+          mergedMap.set(item.id, item);
+        }
+      }
+    });
+
+    return Array.from(mergedMap.values()).sort((a, b) => {
+      const ta = new Date(a.timestamp || a.sentAt || a.sent_at || 0).getTime();
+      const tb = new Date(b.timestamp || b.sentAt || b.sent_at || 0).getTime();
+      return tb - ta;
+    });
+  },
+
+  async countDatasetForPeriod(type, startDate, endDate) {
+    if (type === 'audit') {
+      const auditList = typeof this.getMultiAccountAudit === 'function' ? this.getMultiAccountAudit() : [];
+      return auditList.filter(item => {
+        const ts = item.lastActive || item.timestamp;
+        if (!ts) return true;
+        const itemDate = new Date(ts);
+        const afterStart = startDate ? itemDate >= new Date(startDate) : true;
+        const beforeEnd = endDate ? itemDate <= new Date(endDate + 'T23:59:59.999') : true;
+        return afterStart && beforeEnd;
+      }).length;
+    }
+
+    const { url, key } = this.getSupabaseConfig();
+    if (!url || !key) return null;
+
+    let table = 'reports';
+    let dateCol = 'timestamp';
+    if (type === 'absensi' || type === 'attendance') {
+      table = 'attendance';
+      dateCol = 'timestamp';
+    } else if (type === 'kegiatan' || type === 'activities') {
+      table = 'activities';
+      dateCol = 'timestamp';
+    } else if (type === 'handover' || type === 'handovers') {
+      table = 'handovers';
+      dateCol = 'sent_at';
+    }
+
+    let dateFilter = '';
+    if (startDate) {
+      const s = new Date(startDate.includes('T') ? startDate : `${startDate}T00:00:00`);
+      dateFilter += `&${dateCol}=gte.${s.toISOString()}`;
+    }
+    if (endDate) {
+      const e = new Date(endDate.includes('T') ? endDate : `${endDate}T23:59:59.999`);
+      dateFilter += `&${dateCol}=lte.${e.toISOString()}`;
+    }
+
+    try {
+      const res = await fetch(`${url}/rest/v1/${table}?select=id${dateFilter}&limit=1`, {
+        headers: {
+          'apikey': key,
+          'Authorization': `Bearer ${key}`,
+          'Prefer': 'count=exact'
+        }
+      });
+      if (!res.ok) return null;
+      const cr = res.headers.get('content-range');
+      if (cr && cr.includes('/')) {
+        const total = parseInt(cr.split('/')[1], 10);
+        return isNaN(total) ? 0 : total;
+      }
+      return null;
+    } catch (e) {
+      return null;
     }
   },
 
