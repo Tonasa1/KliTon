@@ -1670,7 +1670,7 @@ export default function App() {
     }
   };
 
-  const handleDownloadDataset = (type, startDate, endDate, format = 'excel') => {
+  const handleDownloadDataset = async (type, startDate, endDate, format = 'excel') => {
     try {
       if (type === 'audit') {
         const auditList = typeof db.getMultiAccountAudit === 'function' ? db.getMultiAccountAudit() : [];
@@ -1705,12 +1705,8 @@ export default function App() {
         return;
       }
 
-      let rawList = [];
-      if (type === 'suhu') rawList = reports;
-      else if (type === 'absensi') rawList = attendance;
-      else if (type === 'kegiatan') rawList = activities;
-      else if (type === 'handover') rawList = handovers;
-      else if (type === 'audit') rawList = typeof db.getMultiAccountAudit === 'function' ? db.getMultiAccountAudit() : [];
+      showToast("Menarik data lengkap dari Cloud...", "info");
+      let rawList = await db.fetchDatasetForPeriod(type, startDate, endDate);
 
       if (currentUser && currentUser.role === 'Operator') {
         if (type === 'suhu') rawList = rawList.filter(r => r.officer === currentUser.name);
@@ -5057,11 +5053,16 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
                 }).length;
 
                 return (
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', padding: '8px 12px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span>📊 Data ditemukan: <strong>{count}</strong> {downloadModalType === 'audit' ? 'perangkat' : 'baris'}</span>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                      {downloadModalStart && downloadModalEnd ? `${downloadModalStart} s/d ${downloadModalEnd}` : (downloadModalStart ? `Sejak ${downloadModalStart}` : 'Semua Periode')}
-                    </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', padding: '8px 12px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span>📊 Data lokal/memori: <strong>{count}</strong> {downloadModalType === 'audit' ? 'perangkat' : 'baris'}</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                        {downloadModalStart && downloadModalEnd ? `${downloadModalStart} s/d ${downloadModalEnd}` : (downloadModalStart ? `Sejak ${downloadModalStart}` : 'Semua Periode')}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: '#16a34a', background: 'rgba(22, 163, 74, 0.08)', padding: '6px 10px', borderRadius: '6px', border: '1px solid rgba(22, 163, 74, 0.2)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span>☁️ <em>Saat tombol unduh diklik, aplikasi akan langsung mengambil 100% data dari Cloud Database sesuai rentang tanggal ini.</em></span>
+                    </div>
                   </div>
                 );
               })()}
@@ -5284,11 +5285,16 @@ ALTER TABLE settings DISABLE ROW LEVEL SECURITY;`}
                 }).length;
 
                 return (
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', padding: '10px 12px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span>📊 Data ditemukan: <strong style={{ color: count > 0 ? 'var(--primary)' : 'var(--danger)' }}>{count}</strong> {downloadModalType === 'audit' ? 'perangkat' : 'baris'}</span>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                      {downloadModalStart && downloadModalEnd ? `${downloadModalStart} s/d ${downloadModalEnd}` : (downloadModalStart ? `Sejak ${downloadModalStart}` : 'Semua Periode')}
-                    </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', padding: '10px 12px', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span>📊 Data lokal/memori: <strong style={{ color: count > 0 ? 'var(--primary)' : 'var(--danger)' }}>{count}</strong> {downloadModalType === 'audit' ? 'perangkat' : 'baris'}</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                        {downloadModalStart && downloadModalEnd ? `${downloadModalStart} s/d ${downloadModalEnd}` : (downloadModalStart ? `Sejak ${downloadModalStart}` : 'Semua Periode')}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: '#16a34a', background: 'rgba(22, 163, 74, 0.08)', padding: '6px 10px', borderRadius: '6px', border: '1px solid rgba(22, 163, 74, 0.2)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span>☁️ <em>Saat tombol unduh diklik, aplikasi akan langsung mengambil 100% data dari Cloud Database sesuai rentang tanggal ini.</em></span>
+                    </div>
                   </div>
                 );
               })()}
